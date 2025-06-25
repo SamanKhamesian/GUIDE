@@ -3,6 +3,7 @@ class Threshold:
     HYPOGLYCEMIA = 70
     HYPERGLYCEMIA = 180
 
+
 # RL Agent Experiment Configuration
 class RLConfig:
     MAX_EPISODES = 100
@@ -43,6 +44,7 @@ class Action:
     EAT = 1
     INJECT = 2
 
+
 class SleepTime:
     WAKE_UP = 7
     BED_TIME = 23
@@ -59,3 +61,7 @@ class RewardFunction:
     EARLY_MEAL_PENALTY = 50
     EARLY_INJECTION_PENALTY = 50
     GOOD_MEAL_TIMING_BONUS = 50
+
+    HYPO_HYPER_1_PENALTY = 50
+    HYPO_HYPER_2_PENALTY = 100
+    HYPO_HYPER_3_PENALTY = 200

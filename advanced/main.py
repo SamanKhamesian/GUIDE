@@ -13,7 +13,8 @@ class EnvironmentAdvanced:
         self.simulator = Simulator(patient_id=patient_id)
         self.simulator.train()
 
-        self.state_size = 72 * 8  # [hour, time_since_last_meal, time_since_last_insulin, sleep, basal, carbs, bolus, cgm]
+        # [hour, time_since_last_meal, time_since_last_insulin, sleep, basal, carbs, bolus, cgm]
+        self.state_size = 72 * 8
         self.action_space = [Action.NOTHING, Action.EAT, Action.INJECT]
 
         self.full_current_window = self.get_window()
@@ -21,6 +22,9 @@ class EnvironmentAdvanced:
         self.prev_action = (Action.NOTHING, 0.0, 0)  # (type, value, time_index)
         self.repeat_counter = 0
         self.sleep_mode = self.get_sleep_signal()
+
+        # Track CGM history per episode
+        self.episode_cgm_history = []
 
     def get_sleep_signal(self):
         return self.simulator.get_sleep_mode()
@@ -30,7 +34,7 @@ class EnvironmentAdvanced:
 
     def get_state(self):
         window = self.get_window()
-        return window[:, :8].flatten()  # [hour, time_since_last_meal, time_since_last_insulin, sleep, basal, carbs, bolus, cgm]
+        return window[:, :8].flatten()
 
     def reset(self):
         self.simulator.reset()
@@ -41,24 +45,30 @@ class EnvironmentAdvanced:
         self.repeat_counter = 0
         self.sleep_mode = self.get_sleep_signal()
 
+        # Reset CGM history at the beginning of each episode
+        self.episode_cgm_history = []
+
         return self.current_state
 
     def step(self, action):
         # Step 1: Predict next CGM values
         predicted_cgm = self.simulator.predict_next_cgm()
 
-        # Step 2: Apply action to simulator
+        # Step 2: Track predicted CGM values per step
+        self.episode_cgm_history.extend(predicted_cgm)
+
+        # Step 3: Apply action to simulator
         bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = self.simulator.apply_action_to_inputs(self.full_current_window, action)
 
         self.sleep_mode = self.get_sleep_signal()
 
-        # Step 3: Compute reward
+        # Step 4: Compute reward
         reward = self.compute_reward(time_since_last_injection_array, time_since_last_meal_array, predicted_cgm, action)
 
-        # Step 4: Commit inputs and predicted CGM
+        # Step 5: Commit inputs and predicted CGM
         self.simulator.commit_next_input(predicted_cgm, bolus_array, time_since_last_injection_array[1:], carb_array, time_since_last_meal_array[1:])
 
-        # Step 5: Update state
+        # Step 6: Update state
         self.current_state = self.get_state()
         self.prev_action = action
 
@@ -91,12 +101,11 @@ class EnvironmentAdvanced:
 
         total_reward = np.sum(reward)
 
-        # TEST 4 - Do nothing when users are in sleep
-        # if self.sleep_mode:
-        #     if action_type != Action.NOTHING:
-        #         total_reward -= RewardFunction.DO_NOTHING_IN_SLEEP
-        #     else:
-        #         total_reward += RewardFunction.DO_NOTHING_IN_SLEEP
+        if self.sleep_mode:
+            if action_type != Action.NOTHING:
+                total_reward -= RewardFunction.DO_NOTHING_IN_SLEEP
+            else:
+                total_reward += RewardFunction.DO_NOTHING_IN_SLEEP
 
         # TEST 3 - Reward for skipping unnecessary actions
         if action_type == Action.NOTHING and np.all(predicted_cgm > 90) and np.all(predicted_cgm < 150):
@@ -136,7 +145,49 @@ class EnvironmentAdvanced:
 
         return total_reward
 
+    # New method to calculate episode-end reward
+    def compute_episode_reward(self):
+        cgm_array = np.array(self.episode_cgm_history)
 
+        # Compute daily metrics clearly:
+        tir_ratio = np.mean((cgm_array >= Threshold.HYPOGLYCEMIA) & (cgm_array <= Threshold.HYPERGLYCEMIA))
+        hypo_events = np.sum(cgm_array < Threshold.HYPOGLYCEMIA)
+        hyper_events = np.sum(cgm_array > Threshold.HYPERGLYCEMIA)
+
+        # Calculate event duration (in 5-minute intervals)
+        hypo_duration = np.sum(cgm_array < Threshold.HYPOGLYCEMIA) * 5
+        hyper_duration = np.sum(cgm_array > Threshold.HYPERGLYCEMIA) * 5
+
+        # Apply clear penalty thresholds
+        episode_reward = 0
+
+        # Reward/Penalty for TIR (daily)
+        episode_reward += 100 if tir_ratio >= 0.7 else -100 * (0.7 - tir_ratio)
+
+        # Penalty for hypo events
+        if hypo_events == 0:
+            episode_reward += RewardFunction.HYPO_HYPER_1_PENALTY
+        elif 1 <= hypo_events <= 3:
+            episode_reward -= RewardFunction.HYPO_HYPER_1_PENALTY
+        elif 4 <= hypo_events <= 5:
+            episode_reward -= RewardFunction.HYPO_HYPER_2_PENALTY
+        else:
+            episode_reward -= RewardFunction.HYPO_HYPER_3_PENALTY
+
+        # Penalty for hyper events
+        if hyper_events == 0:
+            episode_reward += RewardFunction.HYPO_HYPER_1_PENALTY
+        elif 1 <= hyper_events <= 3:
+            episode_reward -= RewardFunction.HYPO_HYPER_1_PENALTY
+        elif 4 <= hyper_events <= 5:
+            episode_reward -= RewardFunction.HYPO_HYPER_2_PENALTY
+        else:
+            episode_reward -= RewardFunction.HYPO_HYPER_3_PENALTY
+
+        # Duration penalty (additional fine-tuning, optional but recommended)
+        episode_reward -= (hypo_duration + hyper_duration) * 0.5  # penalty per minute outside range
+
+        return episode_reward
 
 def main():
     patient_id = "540"
@@ -154,10 +205,11 @@ def main():
     buffer = ReplayBuffer()
 
     print("Filling initial replay buffer...")
-    for _ in range(RLConfig.MAX_EPISODES):
+    for episode in range(RLConfig.MAX_EPISODES):
         state = env.reset()
-        for _ in range(RLConfig.MAX_STEPS_PER_EPISODE):
-            # Random but valid 6D action
+        episode_states, episode_actions, episode_rewards, episode_next_states = [], [], [], []
+
+        for step in range(RLConfig.MAX_STEPS_PER_EPISODE):
             probs = np.random.dirichlet(np.ones(3))
             action_type = np.argmax(probs)
             carb_amount = np.random.uniform(*KnowledgeBase.CARB_RANGE)
@@ -165,15 +217,31 @@ def main():
             time_index = np.random.randint(0, 12)
 
             action_vector = np.array([probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
-
-            # Encode the chosen action only
             action = (action_type, carb_amount if action_type == 1 else insulin_amount, time_index)
 
-            next_state, predicted_cgm, time_series, reward, done, _ = env.step(action)
-            buffer.add(state, action_vector, reward, next_state, done)
+            next_state, _, _, reward, _, _ = env.step(action)
+
+            # Temporarily store states, actions, rewards per step
+            episode_states.append(state)
+            episode_actions.append(action_vector)
+            episode_rewards.append(reward)
+            episode_next_states.append(next_state)
+
             state = next_state
 
-    print("Replay buffer filled.")
+        # At episode-end, compute the final daily metrics reward
+        episode_end_reward = env.compute_episode_reward()
+
+        # Distribute the episode-end reward equally across all steps, or just add clearly at the end:
+        # Option 1 (equal distribution, recommended):
+        total_episode_steps = len(episode_rewards)
+        adjusted_episode_rewards = [r + (episode_end_reward / total_episode_steps) for r in episode_rewards]
+
+        # Store all adjusted transitions in the replay buffer
+        for s, a, r_adj, s_next in zip(episode_states, episode_actions, adjusted_episode_rewards, episode_next_states):
+            buffer.add(s, a, r_adj, s_next, False)
+
+    print("Replay buffer filled with episode-end rewards considered.")
 
     print("Starting TD3-BC training...")
     for step in range(RLConfig.TRAINING_STEPS):
@@ -207,9 +275,17 @@ def main():
 
         state, predicted_cgm, time_series, reward, done, _ = env.step(action)
         total_reward += reward
+
         rewards.append(reward)
         predicted_cgms.extend(predicted_cgm)
         time_window.extend(time_series)
+
+    # Compute and add the episode-end reward
+    episode_end_reward = env.compute_episode_reward()
+    total_reward += episode_end_reward
+
+    print(f"Episode-end reward: {episode_end_reward:.2f}")
+    print(f"Total Evaluation reward (including episode-end): {total_reward:.2f}")
 
     print(f"Evaluation reward: {total_reward:.2f}")
     plot_rewards(rewards, title="Evaluation Reward per Step", save_path="./advanced/tests/reward_levels.png")
