@@ -21,10 +21,19 @@ class EnvironmentAdvanced:
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)  # (type, value, time_index)
         self.repeat_counter = 0
+        self.eat_count = 0
+        self.time_series = self.get_time_series()
+        self.current_hour = self.get_hour()
         self.sleep_mode = self.get_sleep_signal()
 
         # Track CGM history per episode
         self.episode_cgm_history = []
+
+    def get_time_series(self):
+        return self.simulator.get_time_window()
+
+    def get_hour(self):
+        return int(self.get_time_series()[5])
 
     def get_sleep_signal(self):
         return self.simulator.get_sleep_mode()
@@ -43,6 +52,9 @@ class EnvironmentAdvanced:
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)
         self.repeat_counter = 0
+        self.eat_count = 0
+        self.time_series = self.get_time_series()
+        self.current_hour = self.get_hour()
         self.sleep_mode = self.get_sleep_signal()
 
         # Reset CGM history at the beginning of each episode
@@ -60,6 +72,8 @@ class EnvironmentAdvanced:
         # Step 3: Apply action to simulator
         bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = self.simulator.apply_action_to_inputs(self.full_current_window, action)
 
+        self.time_series = self.get_time_series()
+        self.current_hour = self.get_hour()
         self.sleep_mode = self.get_sleep_signal()
 
         # Step 4: Compute reward
@@ -72,8 +86,7 @@ class EnvironmentAdvanced:
         self.current_state = self.get_state()
         self.prev_action = action
 
-        time_series = self.simulator.get_time_window()
-        return self.current_state, predicted_cgm, time_series, reward, False, {}
+        return self.current_state, predicted_cgm, self.time_series, reward, False, {}
 
     # --> TODO: Add reward logging (hypo/hyper breakdown) per step for debugging and performance visualization
     def compute_reward(self, time_since_last_injection_array, time_since_last_meal_array, predicted_cgm, action):
@@ -101,39 +114,54 @@ class EnvironmentAdvanced:
 
         total_reward = np.sum(reward)
 
+        mean_cgm = predicted_cgm.mean()
+        time_since_last_meal = time_since_last_meal_array[time_index] + 1
+        time_since_last_insulin = time_since_last_injection_array[time_index] + 1
+
         if self.sleep_mode:
             if action_type != Action.NOTHING:
                 total_reward -= RewardFunction.DO_NOTHING_IN_SLEEP
             else:
                 total_reward += RewardFunction.DO_NOTHING_IN_SLEEP
 
+        if action_type == Action.EAT:
+            self.eat_count += 1
+
         # TEST 3 - Reward for skipping unnecessary actions
-        if action_type == Action.NOTHING and np.all(predicted_cgm > 90) and np.all(predicted_cgm < 150):
+        if action_type == Action.NOTHING and np.all(predicted_cgm > 120) and np.all(predicted_cgm < 140):
             total_reward += RewardFunction.DO_NOTHING_BONUS  # encourages stability
 
         # TEST 3 - Penalize unnecessary insulin
         if action_type == Action.INJECT:
-            mean_cgm = predicted_cgm.mean()
             if mean_cgm < 150:
                 total_reward -= (150 - mean_cgm) * 10
+
             elif mean_cgm > 200:
                 total_reward += (mean_cgm - 200) * 5
 
+            if time_since_last_insulin < 2 * 12:
+                total_reward -= RewardFunction.EARLY_INJECTION_PENALTY
+
         # Test 6
         if action_type == Action.EAT:
-            time_since_last_meal = time_since_last_meal_array[time_index] + 1
-
-            if time_since_last_meal < 12:
-                total_reward -= RewardFunction.EARLY_MEAL_PENALTY
-
-            elif 3 * 12 <= time_since_last_meal <= 6 * 12:
+            if 6 <= self.current_hour <= 9 or 13 <= self.current_hour <= 15 or 19 <= self.current_hour <= 22:
                 total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
 
-        if action_type == Action.INJECT:
-            time_since_last_injection = time_since_last_injection_array[time_index] + 1
+            if mean_cgm < 110:
+                total_reward += (110 - mean_cgm) * 10
 
-            if time_since_last_injection < 2 * 12:
-                total_reward -= RewardFunction.EARLY_INJECTION_PENALTY
+            if time_since_last_meal < 12 or time_since_last_meal > 6 * 12:
+                total_reward -= RewardFunction.EARLY_MEAL_PENALTY
+
+            elif 12 <= time_since_last_meal <= 6 * 12:
+                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
+
+            if time_since_last_insulin < 24:
+                # good timing
+                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
+            else:
+                # insulin was too long ago, then maybe it missed the chance (still some reward, but less)
+                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS * 0.2
 
         if self.prev_action[0] == action_type and action_type != Action.NOTHING:
             self.repeat_counter += 1
@@ -186,6 +214,11 @@ class EnvironmentAdvanced:
 
         # Duration penalty (additional fine-tuning, optional but recommended)
         episode_reward -= (hypo_duration + hyper_duration) * 0.5  # penalty per minute outside range
+
+        if 3 <= self.eat_count <= 6:
+            episode_reward += RewardFunction.EAT_COUNT_REWARD
+        else:
+            episode_reward -= RewardFunction.EAT_COUNT_REWARD
 
         return episode_reward
 

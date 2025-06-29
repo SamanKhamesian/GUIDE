@@ -26,6 +26,9 @@ class Simulator:
         full_real = self.data.get_inverse_transform(self.data.X_test[0])
         return full_real[-12:, 0]
 
+    def get_current_hour(self):
+        return 0
+
     def get_sleep_mode(self):
         full_real = self.data.get_inverse_transform(self.data.X_test[0])
         return bool(full_real[-1, 1])
