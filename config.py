@@ -46,8 +46,8 @@ class Action:
 
 
 class SleepTime:
-    WAKE_UP = 7
-    BED_TIME = 23
+    WAKE_UP = 6
+    BED_TIME = 0
 
 
 class RewardFunction:
@@ -57,6 +57,7 @@ class RewardFunction:
     DO_NOTHING_IN_SLEEP = 50
     DO_NOTHING_BONUS = 20
     REPEATED_ACTION_PENALTY = 30
+    EAT_COUNT_REWARD = 30
 
     EARLY_MEAL_PENALTY = 50
     EARLY_INJECTION_PENALTY = 50
