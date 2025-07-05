@@ -48,15 +48,38 @@ class Preprocessor:
 
         return time_since
 
-    def create_input_features(self, patient_id, target="glucose"):
-        df_train = pd.read_csv('./dataset/OhioT1DM/' + patient_id + '_train.csv')
-        df_test = pd.read_csv('./dataset/OhioT1DM/' + patient_id + '_test.csv')
+    def create_input_features(self, dataset_name, patient_id):
+        if dataset_name == "ohio":
+            df_train = pd.read_csv(f'./dataset/OhioT1DM/{patient_id}_train.csv')
+            df_test = pd.read_csv(f'./dataset/OhioT1DM/{patient_id}_test.csv')
 
+            glucose_col = "glucose"
+            carb_col = "carbs"
+            bolus_col = "bolus"
+            basal_col = "basal"
+            timestamp_col = "index"
+
+        elif dataset_name == "azt1d":
+            dataframe = pd.read_csv(f'./dataset/AZT1D/Subject {patient_id}.csv')
+            split_index = int((1 - PredictorConfig.SPLIT_RATIO) * len(dataframe))
+            df_train = dataframe.iloc[:split_index].copy()
+            df_test = dataframe.iloc[split_index:].copy()
+
+            glucose_col = "CGM"
+            carb_col = "CarbSize"
+            bolus_col = "TotalBolusInsulinDelivered"
+            basal_col = "Basal"
+            timestamp_col = "EventDateTime"
+
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+
+        # Clean and reset
         df_train.replace(-1, np.nan, inplace=True)
         df_test.replace(-1, np.nan, inplace=True)
 
-        df_train = df_train.dropna(subset=['glucose'])
-        df_test = df_test.dropna(subset=['glucose'])
+        df_train = df_train.dropna(subset=[glucose_col])
+        df_test = df_test.dropna(subset=[glucose_col])
 
         df_train.fillna(0, inplace=True)
         df_test.fillna(0, inplace=True)
@@ -64,65 +87,69 @@ class Preprocessor:
         df_train = df_train.reset_index()
         df_test = df_test.reset_index()
 
-        df_train["timestamp"] = pd.to_datetime(df_train["index"])
+        # Hour
+        df_train["timestamp"] = pd.to_datetime(df_train[timestamp_col])
         df_train["hour"] = df_train["timestamp"].dt.hour
 
-        df_test["timestamp"] = pd.to_datetime(df_test["index"])
+        df_test["timestamp"] = pd.to_datetime(df_test[timestamp_col])
         df_test["hour"] = df_test["timestamp"].dt.hour
 
+        # Sleep
         df_train["sleep"] = np.where((df_train["hour"] >= SleepTime.BED_TIME) | (df_train["hour"] < SleepTime.WAKE_UP), 1.0, 0.0)
         df_test["sleep"] = np.where((df_test["hour"] >= SleepTime.BED_TIME) | (df_test["hour"] < SleepTime.WAKE_UP), 1.0, 0.0)
 
-        df_train["time_since_last_meal"] = self.__compute_time_since_last_event(df_train["carbs"].values)
-        df_train["time_since_last_insulin"] = self.__compute_time_since_last_event(df_train["bolus"].values)
+        # Time since the last meal
+        df_train["time_since_last_meal"] = self.__compute_time_since_last_event(df_train[carb_col].values)
+        df_test["time_since_last_meal"] = self.__compute_time_since_last_event(df_test[carb_col].values)
 
-        df_test["time_since_last_meal"] = self.__compute_time_since_last_event(df_test["carbs"].values)
-        df_test["time_since_last_insulin"] = self.__compute_time_since_last_event(df_test["bolus"].values)
+        # Time since the last insulin injection
+        df_train["time_since_last_insulin"] = self.__compute_time_since_last_event(df_train[bolus_col].values)
+        df_test["time_since_last_insulin"] = self.__compute_time_since_last_event(df_test[bolus_col].values)
 
-        relevant_features = ['hour', 'sleep', 'time_since_last_meal', 'time_since_last_insulin', 'carbs', 'bolus', 'basal', 'glucose']
+        relevant_features = ['hour', 'sleep', 'time_since_last_meal', 'time_since_last_insulin', carb_col, bolus_col, basal_col, glucose_col]
 
-        moving_avg_200 = self.__calculate_moving_average(df_train['glucose'].values, PredictorConfig.MA_WINDOW_SIZE)
+        # moving average
+        moving_avg_200 = self.__calculate_moving_average(df_train[glucose_col].values, PredictorConfig.MA_WINDOW_SIZE)
         df_train['glucose_MA_200'] = moving_avg_200
-
         df_train = df_train[df_train['glucose_MA_200'] != 0.0]
         df_train = df_train.reset_index(drop=True)
 
-        moving_avg_200 = self.__calculate_moving_average(df_test['glucose'].values, PredictorConfig.MA_WINDOW_SIZE)
+        moving_avg_200 = self.__calculate_moving_average(df_test[glucose_col].values, PredictorConfig.MA_WINDOW_SIZE)
         df_test['glucose_MA_200'] = moving_avg_200
-
         df_test = df_test[df_test['glucose_MA_200'] != 0.0]
         df_test = df_test.reset_index(drop=True)
 
         relevant_features = relevant_features + ['glucose_MA_200']
 
+        # glucose class
         choices = [0, 1, 2]
 
-        conditions = [df_train['glucose'] < Threshold.HYPOGLYCEMIA,
-                      (df_train['glucose'] >= Threshold.HYPOGLYCEMIA) & (df_train['glucose'] <= Threshold.HYPERGLYCEMIA),
-                      df_train['glucose'] > Threshold.HYPERGLYCEMIA]
+        conditions = [df_train[glucose_col] < Threshold.HYPOGLYCEMIA,
+                      (df_train[glucose_col] >= Threshold.HYPOGLYCEMIA) & (df_train[glucose_col] <= Threshold.HYPERGLYCEMIA),
+                      df_train[glucose_col] > Threshold.HYPERGLYCEMIA]
         df_train['glucose_class'] = np.select(conditions, choices)
 
-        conditions = [df_test['glucose'] < Threshold.HYPOGLYCEMIA,
-                      (df_test['glucose'] >= Threshold.HYPOGLYCEMIA) & (df_test['glucose'] <= Threshold.HYPERGLYCEMIA),
-                      df_test['glucose'] > Threshold.HYPERGLYCEMIA]
+        conditions = [df_test[glucose_col] < Threshold.HYPOGLYCEMIA,
+                      (df_test[glucose_col] >= Threshold.HYPOGLYCEMIA) & (df_test[glucose_col] <= Threshold.HYPERGLYCEMIA),
+                      df_test[glucose_col] > Threshold.HYPERGLYCEMIA]
         df_test['glucose_class'] = np.select(conditions, choices)
 
         relevant_features = relevant_features + ['glucose_class']
 
         return (df_train[relevant_features].values,
-                df_train[target].values,
+                df_train[glucose_col].values,
                 df_test[relevant_features].values,
-                df_test[target].values)
+                df_test[glucose_col].values)
 
 
 class DataController:
-    def __init__(self, patient_id, target):
-        self.target = target
+    def __init__(self, dataset_name, patient_id):
+        self.dataset_name = dataset_name
         self.patient_id = patient_id
 
         self.__preprocessor = Preprocessor()
 
-        X_train, y_train, self.X_test, self.y_test = self.__preprocessor.create_input_features(patient_id=patient_id, target=target)
+        X_train, y_train, self.X_test, self.y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
         self.X_train_seq_, self.y_train_seq_, self.X_val_seq_, self.y_val_seq_ = self.__preprocessor.create_train_val_data(X_train, y_train)
 
         self.X_test = self.X_test[:PredictorConfig.TRAIN_WINDOW_SIZE]
@@ -145,7 +172,7 @@ class DataController:
         return EMA_new
 
     def commit_shift(self, predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
-        # Step 1: Get current unscaled window
+        # Step 1: Get the current unscaled window
         original_real = self.get_inverse_transform(self.X_test[0])  # shape: (72, 10)
 
         # Step 2: Shift → remove first 12 rows
@@ -162,7 +189,7 @@ class DataController:
         count = np.sum(hour_array == last_hour)
         remaining = 12 - count
 
-        # Generate next 12 hour values
+        # Generate next 12-hour values
         next_12_hours = [last_hour] * remaining + [(last_hour + 1) % 24] * (12 - remaining)
         next_12_sleep_flags = [1.0 if (h >= SleepTime.BED_TIME or h < SleepTime.WAKE_UP) else 0.0 for h in next_12_hours]
 

@@ -1,16 +1,16 @@
 import numpy as np
 import torch
-
+import os
 from config import Action, Threshold, KnowledgeBase, RLConfig, RewardFunction
 from replay_buffer import ReplayBuffer
 from advanced.simulator import Simulator
 from advanced.td3_bc_agent import TD3_BC
-from utils import plot_rewards, plot_cgm_levels, plot_cgm_reward_action_with_legend, set_seed
+from utils import plot_rewards, plot_cgm_levels, plot_cgm_reward_action_with_legend, set_seed, numerical_sort_key
 
 
 class EnvironmentAdvanced:
-    def __init__(self, patient_id):
-        self.simulator = Simulator(patient_id=patient_id)
+    def __init__(self, dataset_name, patient_id):
+        self.simulator = Simulator(dataset_name=dataset_name, patient_id=patient_id)
         self.simulator.train()
 
         # [hour, time_since_last_meal, time_since_last_insulin, sleep, basal, carbs, bolus, cgm]
@@ -222,9 +222,8 @@ class EnvironmentAdvanced:
 
         return episode_reward
 
-def main():
-    patient_id = "540"
-    env = EnvironmentAdvanced(patient_id)
+def main(dataset_name, patient_id):
+    env = EnvironmentAdvanced(dataset_name=dataset_name, patient_id=patient_id)
     device = torch.device("cpu")
 
     # Define max_action in real-world space
@@ -333,4 +332,4 @@ def main():
 
 if __name__ == "__main__":
     set_seed(42)
-    main()
+    main(dataset_name=RLConfig.DATASET, patient_id=RLConfig.PATIENT_ID)

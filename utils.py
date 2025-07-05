@@ -1,5 +1,6 @@
 import os
 import random
+import re
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -30,6 +31,13 @@ def set_seed(seed=42):
     # Ensure deterministic operations (for TF 2.x)
     os.environ['PYTHONHASHSEED'] = str(seed)
     os.environ['TF_DETERMINISTIC_OPS'] = '1'  # Optional: force deterministic TF ops
+
+
+def numerical_sort_key(s):
+    numbers = re.findall(r'\d+', s)
+    if numbers:
+        return int(numbers[0])
+    return s
 
 
 def plot_rewards(reward_list, title="Reward per Step", save_path="test.png"):

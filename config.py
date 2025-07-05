@@ -6,6 +6,9 @@ class Threshold:
 
 # RL Agent Experiment Configuration
 class RLConfig:
+    PATIENT_ID = "20"
+    DATASET = "azt1d"
+
     MAX_EPISODES = 100
     MAX_STEPS_PER_EPISODE = 72
     TRAINING_STEPS = 10000
@@ -23,13 +26,6 @@ class PredictorConfig:
     BATCH_SIZE = 48
     EPOCHS = 30
     WEIGHTS = [1, 3.296363582, 2.382397706]
-
-
-class TargetModel:
-    BASAL = 'basal'
-    BOLUS = 'bolus'
-    GLUCOSE = 'glucose'
-    CARBS = 'carbs'
 
 
 # Knowledge Base for constraints
