@@ -1,11 +1,11 @@
-from config import Action, TargetModel, PredictorConfig
+from config import Action, PredictorConfig
 from predictor import Predictor
 from preprocess import DataController
-import numpy as np
+
 
 class Simulator:
-    def __init__(self, patient_id):
-        self.data = DataController(patient_id, TargetModel.GLUCOSE)
+    def __init__(self, dataset_name, patient_id):
+        self.data = DataController(dataset_name, patient_id)
         self.predictor = Predictor()
 
     def train(self):
@@ -71,4 +71,4 @@ class Simulator:
 
     def reset(self):
         print("\nResetting simulator...")
-        self.data = DataController(self.data.patient_id, TargetModel.GLUCOSE)
+        self.data = DataController(self.data.dataset_name, self.data.patient_id)
