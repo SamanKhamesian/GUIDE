@@ -9,28 +9,25 @@ class Simulator:
         self.predictor = Predictor()
 
     def train(self):
-        self.predictor.train(self.data.X_train_seq_,
-                             self.data.y_train_seq_,
-                             self.data.X_val_seq_,
-                             self.data.y_val_seq_,
+        self.predictor.train(self.data.X_predictor_train,
+                             self.data.y_predictor_train,
+                             self.data.X_predictor_val,
+                             self.data.y_predictor_val,
                              epochs=PredictorConfig.EPOCHS,
                              batch_size=PredictorConfig.BATCH_SIZE)
 
     def predict_next_cgm(self):
-        return self.predictor.predict(self.data.X_test[:, :, 4:])[0]
+        return self.predictor.predict(self.data.X[:, :, 4:])[0]
 
     def get_full_current_window(self):
-        return self.data.X_test[0].copy()
+        return self.data.X[0].copy()
 
     def get_time_window(self):
-        full_real = self.data.get_inverse_transform(self.data.X_test[0])
+        full_real = self.data.get_inverse_transform(self.data.X[0])
         return full_real[-12:, 0]
 
-    def get_current_hour(self):
-        return 0
-
     def get_sleep_mode(self):
-        full_real = self.data.get_inverse_transform(self.data.X_test[0])
+        full_real = self.data.get_inverse_transform(self.data.X[0])
         return bool(full_real[-1, 1])
 
     def apply_action_to_inputs(self, full_current_window, action):
@@ -69,6 +66,11 @@ class Simulator:
     def commit_next_input(self, predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
         self.data.commit_shift(predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array)
 
-    def reset(self):
+    def reset(self, state_index, is_testing=False):
         print("\nResetting simulator...")
-        self.data = DataController(self.data.dataset_name, self.data.patient_id)
+        if is_testing:
+            self.data.X = self.data.X_rl_test[state_index]
+        else:
+            self.data.X = self.data.X_rl_train[state_index]
+
+        self.data.X = self.data.X[None, :, :]

@@ -24,7 +24,7 @@ class ReplayBuffer:
         r = np.array(r).reshape(-1, 1)
         s2 = np.array(s2)
         d = np.array(d).reshape(-1, 1)
-        not_d = 1.0 - d  # used in TD3 for bootstrapping
+        not_d = 1.0 - d
 
         if to_tensor:
             s = torch.FloatTensor(s).to(device)
