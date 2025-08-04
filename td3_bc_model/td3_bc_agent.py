@@ -4,31 +4,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from config import TD3Config
 
-# Actor network maps state to continuous action output ∈ [0, max_action]
+
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(state_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim),
-            nn.Tanh()
-            # Ensure output in [-1, 1], scaled later by max_action
-        )
-        self.max_action = max_action
+        super(Actor, self).__init__()
+        self.l1 = nn.Linear(state_dim, 400)
+        self.l2 = nn.Linear(400, 300)
+        self.l3 = nn.Linear(300, action_dim)
+
+        self.register_buffer("max_action", torch.tensor(max_action, dtype=torch.float32))  # vector
 
     def forward(self, state):
-        return self.max_action * self.net(state)
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        a = self.l3(a)
+        return torch.tanh(a) * self.max_action
 
 
-# Critic network estimates Q-values for (state, action) pairs
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim):
-        super().__init__()
-        self.q1 = nn.Sequential(nn.Linear(state_dim + action_dim, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, 1))
-        self.q2 = nn.Sequential(nn.Linear(state_dim + action_dim, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, 1))
+        super(Critic, self).__init__()
+        self.q1 = nn.Sequential(nn.Linear(state_dim + action_dim, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1), )
+        self.q2 = nn.Sequential(nn.Linear(state_dim + action_dim, 400), nn.ReLU(), nn.Linear(400, 300), nn.ReLU(), nn.Linear(300, 1), )
 
     def forward(self, state, action):
         sa = torch.cat([state, action], dim=1)
@@ -39,35 +38,33 @@ class Critic(nn.Module):
         return self.q1(sa)
 
 
-# TD3 with Behavior Cloning loss (TD3-BC)
 class TD3_BC:
     def __init__(self, state_dim, action_dim, max_action, device):
+        self.device = device
+
         self.actor = Actor(state_dim, action_dim, max_action).to(device)
         self.actor_target = copy.deepcopy(self.actor)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=TD3Config.LEARNING_RATE)
 
         self.critic = Critic(state_dim, action_dim).to(device)
         self.critic_target = copy.deepcopy(self.critic)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=TD3Config.LEARNING_RATE)
 
-        self.device = device
-        self.gamma = 0.99
-        self.tau = 0.005
-        self.alpha = 2.5  # scaling for BC loss term
-        self.policy_noise = 0.2
-        self.noise_clip = 0.5
-        self.policy_freq = 2
+        self.gamma = TD3Config.GAMMA
+        self.tau = TD3Config.TAU
+        self.alpha = TD3Config.ALPHA
+        self.policy_noise = TD3Config.POLICY_NOISE
+        self.noise_clip = TD3Config.NOISE_CLIP
+        self.policy_freq = TD3Config.POLICY_FREQ
         self.total_it = 0
 
-    # Select action from actor (inference mode)
     def select_action(self, state):
         state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
         return self.actor(state).cpu().data.numpy().flatten()
 
-    # One training step using batch from replay buffer
-    def train(self, replay_buffer, batch_size=256):
+    def train(self, replay_buffer, batch_size=TD3Config.BATCH_SIZE):
         self.total_it += 1
-        state, action, reward, next_state, not_done = replay_buffer.sample(batch_size, device=self.device)
+        state, action, reward, next_state, not_done = replay_buffer.sample(batch_size, to_tensor=True, device=self.device)
 
         with torch.no_grad():
             noise = (torch.randn_like(action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
@@ -75,14 +72,12 @@ class TD3_BC:
             target_Q1, target_Q2 = self.critic_target(next_state, next_action)
             target_Q = reward + not_done * self.gamma * torch.min(target_Q1, target_Q2)
 
-        # Update critic networks
         current_Q1, current_Q2 = self.critic(state, action)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        # Delayed actor update
         if self.total_it % self.policy_freq == 0:
             pi = self.actor(state)
             Q = self.critic.Q1(state, pi)
@@ -93,12 +88,11 @@ class TD3_BC:
             actor_loss.backward()
             self.actor_optimizer.step()
 
-            # Update target networks
-            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+            # Update targets
             for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
         if self.total_it % 1000 == 0:
-            print(f"[TD3-BC] Step: {self.total_it} | Actor Loss: {actor_loss.item():.4f} | Critic Loss: {critic_loss.item():.4f}")
-
+            print(f"[TD3-BC Adv] Step: {self.total_it} | Actor Loss: {actor_loss.item():.4f} | Critic Loss: {critic_loss.item():.4f}")

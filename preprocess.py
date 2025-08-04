@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from config import PredictorConfig, Threshold, SleepTime
+from config import PredictorConfig, Threshold, SleepTime, TD3Config
 
 
 class Preprocessor:
@@ -17,7 +17,7 @@ class Preprocessor:
         return np.concatenate((np.zeros(window_size - 1), moving_avg), axis=0)
 
     @staticmethod
-    def __create_sequences(X, y, time_steps, prediction_horizon):
+    def __create_x_y_sequences(X, y, time_steps, prediction_horizon):
         X_seq, y_seq = [], []
         for i in range(len(X) - time_steps - prediction_horizon + 1):
             X_seq.append(X[i:i + time_steps])
@@ -25,16 +25,34 @@ class Preprocessor:
             y_seq.append(y_temp)
         return np.array(X_seq), np.array(y_seq)
 
+    @staticmethod
+    def __create_x_sequences(X, time_steps):
+        X_seq = []
+        for i in range(len(X) - time_steps + 1):
+            X_seq.append(X[i:i + time_steps])
+        return np.array(X_seq)
+
     def create_train_val_data(self, _X_train_val_, _y_train_val_):
         _X_train_, _X_val_, _y_train_, _y_val_ = train_test_split(_X_train_val_, _y_train_val_, test_size=PredictorConfig.SPLIT_RATIO, shuffle=False)
 
         _X_train_ = self.scaler.fit_transform(_X_train_)[:, 4:]
         _X_val_ = self.scaler.transform(_X_val_)[:, 4:]
 
-        _X_train_seq_, _y_train_seq_ = self.__create_sequences(_X_train_, _y_train_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
-        _X_val_seq_, _y_val_seq_ = self.__create_sequences(_X_val_, _y_val_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
+        _X_train_seq_, _y_train_seq_ = self.__create_x_y_sequences(_X_train_, _y_train_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
+        _X_val_seq_, _y_val_seq_ = self.__create_x_y_sequences(_X_val_, _y_val_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
 
         return _X_train_seq_, _y_train_seq_, _X_val_seq_, _y_val_seq_
+
+
+    def create_rl_train_test_data(self, X):
+        x = self.scaler.transform(X)
+
+        _X_train_, _X_test_ = train_test_split(x, test_size=0.2, shuffle=False)
+        _X_train_seq = self.__create_x_sequences(X=_X_train_, time_steps=6 * 12)
+        _X_test_seq = self.__create_x_sequences(X=_X_test_, time_steps=6 * 12)
+
+        return _X_train_seq, _X_test_seq
+
 
     @staticmethod
     def __compute_time_since_last_event(event_series, init_value=288):
@@ -149,14 +167,16 @@ class DataController:
 
         self.__preprocessor = Preprocessor()
 
-        X_train, y_train, self.X_test, self.y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
-        self.X_train_seq_, self.y_train_seq_, self.X_val_seq_, self.y_val_seq_ = self.__preprocessor.create_train_val_data(X_train, y_train)
+        X_train, y_train, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
+        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, y_train)
 
-        self.X_test = self.X_test[:PredictorConfig.TRAIN_WINDOW_SIZE]
-        self.X_test = self.__preprocessor.scaler.transform(self.X_test)
-        self.X_test = self.X_test[None, :, :]
-
-        self.y_test = self.y_test[PredictorConfig.TRAIN_WINDOW_SIZE: PredictorConfig.TRAIN_WINDOW_SIZE + PredictorConfig.N_PREDICTION]
+        self.X_rl_train, self.X_rl_test = self.__preprocessor.create_rl_train_test_data(X_test)
+        self.X = self.X_rl_train[0][None, :, :]
+        # self.X_test = self.X_test[:PredictorConfig.TRAIN_WINDOW_SIZE]
+        # self.X_test = self.__preprocessor.scaler.transform(self.X_test)
+        # self.X_test = self.X_test[None, :, :]
+        #
+        # self.y_test = self.y_test[PredictorConfig.TRAIN_WINDOW_SIZE: PredictorConfig.TRAIN_WINDOW_SIZE + PredictorConfig.N_PREDICTION]
 
     def get_inverse_transform(self, data):
         return self.__preprocessor.scaler.inverse_transform(data)
@@ -173,7 +193,7 @@ class DataController:
 
     def commit_shift(self, predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
         # Step 1: Get the current unscaled window
-        original_real = self.get_inverse_transform(self.X_test[0])  # shape: (72, 10)
+        original_real = self.get_inverse_transform(self.X[0])  # shape: (72, 10)
 
         # Step 2: Shift → remove first 12 rows
         original_real = original_real[PredictorConfig.N_PREDICTION:]  # shape: (60, 10)
@@ -221,7 +241,7 @@ class DataController:
 
         # Step 6: Scale and update
         final_scaled = self.get_transform(final_real)
-        self.X_test[0] = final_scaled
+        self.X[0] = final_scaled
 
         print("\nWindow shifted and new predicted CGM appended to X_test.")
 

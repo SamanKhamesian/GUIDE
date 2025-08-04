@@ -1,11 +1,22 @@
 import numpy as np
 import torch
-import os
-from config import Action, Threshold, KnowledgeBase, RLConfig, RewardFunction
-from replay_buffer import ReplayBuffer
-from advanced.simulator import Simulator
-from advanced.td3_bc_agent import TD3_BC
-from utils import plot_rewards, plot_cgm_levels, plot_cgm_reward_action_with_legend, set_seed, numerical_sort_key
+
+from buffer import PPOBuffer
+from config import Action, Threshold, PPORewardShaping, PPOConfig, DataConfig
+from ppo_agent import PPOAgent
+from simulator import Simulator
+from utils import plot_rewards, plot_cgm_levels, plot_cgm_reward_action_with_legend, set_seed
+
+
+def generate_discrete_values(start, stop, step):
+    count = int(round((stop - start) / step)) + 1
+    return [round(start + i * step, 2) for i in range(count)]
+
+
+def magni_scaled_array(cgm):
+    risk = 10 * (1.509 * (np.log(cgm) ** 1.084 - 5.381)) ** 2
+    risk_clipped = np.clip(risk, 0, 15.5)
+    return 100 * (1 - risk_clipped / 7.75)
 
 
 class EnvironmentAdvanced:
@@ -45,8 +56,8 @@ class EnvironmentAdvanced:
         window = self.get_window()
         return window[:, :8].flatten()
 
-    def reset(self):
-        self.simulator.reset()
+    def reset(self, state_index, is_testing=False):
+        self.simulator.reset(state_index, is_testing)
 
         self.full_current_window = self.get_window()
         self.current_state = self.get_state()
@@ -70,7 +81,8 @@ class EnvironmentAdvanced:
         self.episode_cgm_history.extend(predicted_cgm)
 
         # Step 3: Apply action to simulator
-        bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = self.simulator.apply_action_to_inputs(self.full_current_window, action)
+        bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = self.simulator.apply_action_to_inputs(self.full_current_window,
+                                                                                                                                     action)
 
         self.time_series = self.get_time_series()
         self.current_hour = self.get_hour()
@@ -97,9 +109,9 @@ class EnvironmentAdvanced:
         normal = ~hypo & ~hyper
 
         # Extract weights
-        w_normal = RewardFunction.WEIGHTS[0]
-        w_hypo = RewardFunction.WEIGHTS[1]
-        w_hyper = RewardFunction.WEIGHTS[2]
+        w_normal = PPORewardShaping.WEIGHTS[0]
+        w_hypo = PPORewardShaping.WEIGHTS[1]
+        w_hyper = PPORewardShaping.WEIGHTS[2]
 
         # Piecewise reward components
         reward = np.zeros_like(predicted_cgm)
@@ -108,9 +120,9 @@ class EnvironmentAdvanced:
         # TEST 2
         reward[hypo] = -w_hypo * (Threshold.HYPOGLYCEMIA - predicted_cgm[hypo])
         reward[hyper] = -w_hyper * (predicted_cgm[hyper] - Threshold.HYPERGLYCEMIA)
-        reward[normal] = np.where(normal_vals <= RewardFunction.IDEAL_CGM,
-                                  (normal_vals - Threshold.HYPOGLYCEMIA) / (RewardFunction.IDEAL_CGM - Threshold.HYPOGLYCEMIA) * w_normal,
-                                  (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - RewardFunction.IDEAL_CGM) * w_normal)
+        reward[normal] = np.where(normal_vals <= PPORewardShaping.IDEAL_CGM,
+                                  (normal_vals - Threshold.HYPOGLYCEMIA) / (PPORewardShaping.IDEAL_CGM - Threshold.HYPOGLYCEMIA) * w_normal,
+                                  (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - PPORewardShaping.IDEAL_CGM) * w_normal)
 
         total_reward = np.sum(reward)
 
@@ -120,16 +132,16 @@ class EnvironmentAdvanced:
 
         if self.sleep_mode:
             if action_type != Action.NOTHING:
-                total_reward -= RewardFunction.DO_NOTHING_IN_SLEEP
+                total_reward -= PPORewardShaping.DO_NOTHING_IN_SLEEP
             else:
-                total_reward += RewardFunction.DO_NOTHING_IN_SLEEP
+                total_reward += PPORewardShaping.DO_NOTHING_IN_SLEEP
 
         if action_type == Action.EAT:
             self.eat_count += 1
 
         # TEST 3 - Reward for skipping unnecessary actions
         if action_type == Action.NOTHING and np.all(predicted_cgm > 120) and np.all(predicted_cgm < 140):
-            total_reward += RewardFunction.DO_NOTHING_BONUS  # encourages stability
+            total_reward += PPORewardShaping.DO_NOTHING_BONUS  # encourages stability
 
         # TEST 3 - Penalize unnecessary insulin
         if action_type == Action.INJECT:
@@ -139,37 +151,40 @@ class EnvironmentAdvanced:
             elif mean_cgm > 200:
                 total_reward += (mean_cgm - 200) * 5
 
+            else:
+                total_reward -= (200 - mean_cgm)
+
             if time_since_last_insulin < 2 * 12:
-                total_reward -= RewardFunction.EARLY_INJECTION_PENALTY
+                total_reward -= PPORewardShaping.EARLY_INJECTION_PENALTY
 
         # Test 6
         if action_type == Action.EAT:
             if 6 <= self.current_hour <= 9 or 13 <= self.current_hour <= 15 or 19 <= self.current_hour <= 22:
-                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
+                total_reward += PPORewardShaping.GOOD_MEAL_TIMING_BONUS
 
             if mean_cgm < 110:
                 total_reward += (110 - mean_cgm) * 10
 
             if time_since_last_meal < 12 or time_since_last_meal > 6 * 12:
-                total_reward -= RewardFunction.EARLY_MEAL_PENALTY
+                total_reward -= PPORewardShaping.EARLY_MEAL_PENALTY
 
             elif 12 <= time_since_last_meal <= 6 * 12:
-                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
+                total_reward += PPORewardShaping.GOOD_MEAL_TIMING_BONUS
 
             if time_since_last_insulin < 24:
                 # good timing
-                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS
+                total_reward += PPORewardShaping.GOOD_MEAL_TIMING_BONUS
             else:
                 # insulin was too long ago, then maybe it missed the chance (still some reward, but less)
-                total_reward += RewardFunction.GOOD_MEAL_TIMING_BONUS * 0.2
+                total_reward += PPORewardShaping.GOOD_MEAL_TIMING_BONUS * 0.2
+
+        if self.repeat_counter >= 1:
+            total_reward -= PPORewardShaping.REPEATED_ACTION_PENALTY
 
         if self.prev_action[0] == action_type and action_type != Action.NOTHING:
             self.repeat_counter += 1
         else:
             self.repeat_counter = 0
-
-        if self.repeat_counter >= 2:
-            total_reward -= RewardFunction.REPEATED_ACTION_PENALTY
 
         return total_reward
 
@@ -194,142 +209,123 @@ class EnvironmentAdvanced:
 
         # Penalty for hypo events
         if hypo_events == 0:
-            episode_reward += RewardFunction.HYPO_HYPER_1_PENALTY
+            episode_reward += PPORewardShaping.HYPO_HYPER_1_PENALTY
         elif 1 <= hypo_events <= 3:
-            episode_reward -= RewardFunction.HYPO_HYPER_1_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_1_PENALTY
         elif 4 <= hypo_events <= 5:
-            episode_reward -= RewardFunction.HYPO_HYPER_2_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_2_PENALTY
         else:
-            episode_reward -= RewardFunction.HYPO_HYPER_3_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_3_PENALTY
 
         # Penalty for hyper events
         if hyper_events == 0:
-            episode_reward += RewardFunction.HYPO_HYPER_1_PENALTY
+            episode_reward += PPORewardShaping.HYPO_HYPER_1_PENALTY
         elif 1 <= hyper_events <= 3:
-            episode_reward -= RewardFunction.HYPO_HYPER_1_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_1_PENALTY
         elif 4 <= hyper_events <= 5:
-            episode_reward -= RewardFunction.HYPO_HYPER_2_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_2_PENALTY
         else:
-            episode_reward -= RewardFunction.HYPO_HYPER_3_PENALTY
+            episode_reward -= PPORewardShaping.HYPO_HYPER_3_PENALTY
 
         # Duration penalty (additional fine-tuning, optional but recommended)
         episode_reward -= (hypo_duration + hyper_duration) * 0.5  # penalty per minute outside range
 
         if 3 <= self.eat_count <= 6:
-            episode_reward += RewardFunction.EAT_COUNT_REWARD
+            episode_reward += PPORewardShaping.EAT_COUNT_REWARD
         else:
-            episode_reward -= RewardFunction.EAT_COUNT_REWARD
+            episode_reward -= PPORewardShaping.EAT_COUNT_REWARD
 
         return episode_reward
 
+
 def main(dataset_name, patient_id):
     env = EnvironmentAdvanced(dataset_name=dataset_name, patient_id=patient_id)
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Define max_action in real-world space
-    max_action = np.array([1.0, 1.0, 1.0,  # softmax logits (prob_type_*)
-        KnowledgeBase.CARB_RANGE[1],  # max carb in grams
-        KnowledgeBase.INSULIN_RANGE[1],  # max insulin in units
-        11.0  # time index (12 slots)
-    ])
+    state_dim = PPOConfig.STATE_SIZE
+    # Prepare discrete action values
+    carb_values = list(range(PPOConfig.CARB_RANGE[0], PPOConfig.CARB_RANGE[1] + 1, PPOConfig.CARB_STEP))
+    insulin_values = generate_discrete_values(PPOConfig.INSULIN_RANGE[0], PPOConfig.INSULIN_RANGE[1], PPOConfig.INSULIN_STEP)
+    time_indices = list(range(PPOConfig.TIME_INDEX_RANGE[0], PPOConfig.TIME_INDEX_RANGE[1] + 1, PPOConfig.TIME_STEP))
 
-    agent = TD3_BC(state_dim=72 * 8, action_dim=6, max_action=max_action, device=device)
-    buffer = ReplayBuffer()
+    n_carb = len(carb_values)
+    n_insulin = len(insulin_values)
+    n_time = len(time_indices)
 
-    print("Filling initial replay buffer...")
-    for episode in range(RLConfig.MAX_EPISODES):
-        state = env.reset()
-        episode_states, episode_actions, episode_rewards, episode_next_states = [], [], [], []
+    agent = PPOAgent(state_dim=state_dim, device=device, n_carb=n_carb, n_insulin=n_insulin, n_time=n_time)
+    buffer = PPOBuffer(state_dim=state_dim, device=device)
 
-        for step in range(RLConfig.MAX_STEPS_PER_EPISODE):
-            probs = np.random.dirichlet(np.ones(3))
-            action_type = np.argmax(probs)
-            carb_amount = np.random.uniform(*KnowledgeBase.CARB_RANGE)
-            insulin_amount = np.random.uniform(*KnowledgeBase.INSULIN_RANGE)
-            time_index = np.random.randint(0, 12)
+    for i in range(PPOConfig.NUM_TRAIN_INIT_STATE):
+        for episode in range(PPOConfig.MAX_EPISODES):
+            state = env.reset(i, False)
 
-            action_vector = np.array([probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
-            action = (action_type, carb_amount if action_type == 1 else insulin_amount, time_index)
+            for step in range(PPOConfig.MAX_STEPS_PER_EPISODE):
+                action_type, carb_idx, insulin_idx, time_index, log_prob = agent.select_action(state)
 
-            next_state, _, _, reward, _, _ = env.step(action)
+                carb_amount = carb_values[carb_idx]
+                insulin_amount = insulin_values[insulin_idx]
 
-            # Temporarily store states, actions, rewards per step
-            episode_states.append(state)
-            episode_actions.append(action_vector)
-            episode_rewards.append(reward)
-            episode_next_states.append(next_state)
+                value = (carb_amount if action_type == Action.EAT else insulin_amount if action_type == Action.INJECT else 0.0)
 
-            state = next_state
+                action = (action_type, value, time_index)
+                next_state, predicted_cgm, ts, reward, done, _ = env.step(action)
 
-        # At episode-end, compute the final daily metrics reward
-        episode_end_reward = env.compute_episode_reward()
+                value_estimate = agent.evaluate(state)
+                buffer.store(state, [action_type, carb_idx, insulin_idx, time_index], reward, value_estimate, log_prob, done)
 
-        # Distribute the episode-end reward equally across all steps, or just add clearly at the end:
-        # Option 1 (equal distribution, recommended):
-        total_episode_steps = len(episode_rewards)
-        adjusted_episode_rewards = [r + (episode_end_reward / total_episode_steps) for r in episode_rewards]
+                state = next_state
 
-        # Store all adjusted transitions in the replay buffer
-        for s, a, r_adj, s_next in zip(episode_states, episode_actions, adjusted_episode_rewards, episode_next_states):
-            buffer.add(s, a, r_adj, s_next, False)
+            ep_end_reward = env.compute_episode_reward()
 
-    print("Replay buffer filled with episode-end rewards considered.")
+            for i in range(PPOConfig.MAX_STEPS_PER_EPISODE):
+                buffer.rewards[i] += ep_end_reward / PPOConfig.MAX_STEPS_PER_EPISODE
 
-    print("Starting TD3-BC training...")
-    for step in range(RLConfig.TRAINING_STEPS):
-        agent.train(buffer, batch_size=256)
+            agent.train(buffer)
+            buffer.reset()
 
-    print("Evaluating policy...")
-    state = env.reset()
+    print("Evaluating PPO policy...")
+    state = env.reset(0, True)
     total_reward = 0
-
     rewards = []
     predicted_cgms = []
     actions = []
     time_window = []
 
-    for _ in range(RLConfig.TESTING_STEPS):
-        raw_action = agent.select_action(state)
-        raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
+    for _ in range(PPOConfig.TESTING_STEPS):
+        action_type, carb_idx, insulin_idx, time_index, _ = agent.select_action(state)
 
-        # Map softmax logits to discrete action type
-        probs = raw_action[:3]
-        mapped_type = int(np.argmax(probs))
+        carb_amount = carb_values[carb_idx]
+        insulin_amount = insulin_values[insulin_idx]
 
-        carb_amt = raw_action[3]
-        insulin_amt = raw_action[4]
-        mapped_time = int(np.clip(np.round(raw_action[5]), 0, 11))
+        value = carb_amount if action_type == Action.EAT else insulin_amount if action_type == Action.INJECT else 0.0
+        action = (action_type, value, time_index)
 
-        mapped_value = carb_amt if mapped_type == 1 else insulin_amt if mapped_type == 2 else 0.0
-        action = (mapped_type, mapped_value, mapped_time)
-        actions.append(action)
-        print(f"Generated action: Type={mapped_type}, Value={mapped_value:.2f}, Time Index={mapped_time}")
-
-        state, predicted_cgm, time_series, reward, done, _ = env.step(action)
+        state, predicted_cgm, ts, reward, done, _ = env.step(action)
         total_reward += reward
 
         rewards.append(reward)
         predicted_cgms.extend(predicted_cgm)
-        time_window.extend(time_series)
+        actions.append(action)
+        time_window.extend(ts)
 
-    # Compute and add the episode-end reward
+    # add this back here
     episode_end_reward = env.compute_episode_reward()
     total_reward += episode_end_reward
 
     print(f"Episode-end reward: {episode_end_reward:.2f}")
     print(f"Total Evaluation reward (including episode-end): {total_reward:.2f}")
 
-    print(f"Evaluation reward: {total_reward:.2f}")
-    plot_rewards(rewards, title="Evaluation Reward per Step", save_path="./advanced/tests/reward_levels.png")
-    plot_cgm_levels(predicted_cgms, time_window, title="Predicted CGM with Ranges", save_path="./advanced/tests/cgm_levels.png")
+    print(f"Final evaluation reward: {total_reward:.2f}")
+    plot_rewards(rewards, title="PPO Reward per Step", save_path="./ppo_model/tests/reward_plot.png")
+    plot_cgm_levels(predicted_cgms, time_window, title="Predicted CGM Levels", save_path="./ppo_model/tests/cgm_plot.png")
     plot_cgm_reward_action_with_legend(cgm_sequence=predicted_cgms,
                                        hour_series=time_window,
                                        reward_list=rewards,
                                        action_list=actions,
-                                       days=3,
-                                       save_path_prefix="./advanced/tests/advanced_test")
+                                       days=1,
+                                       save_path_prefix="./ppo_model/tests/ultimate_test")
 
 
 if __name__ == "__main__":
     set_seed(42)
-    main(dataset_name=RLConfig.DATASET, patient_id=RLConfig.PATIENT_ID)
+    main(dataset_name=DataConfig.DATASET, patient_id=DataConfig.PATIENT_ID)
