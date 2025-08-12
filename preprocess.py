@@ -16,43 +16,6 @@ class Preprocessor:
         moving_avg = np.convolve(data, np.ones(window_size) / window_size, mode='valid')
         return np.concatenate((np.zeros(window_size - 1), moving_avg), axis=0)
 
-    @staticmethod
-    def __create_x_y_sequences(X, y, time_steps, prediction_horizon):
-        X_seq, y_seq = [], []
-        for i in range(len(X) - time_steps - prediction_horizon + 1):
-            X_seq.append(X[i:i + time_steps])
-            y_temp = y[i + time_steps:i + time_steps + prediction_horizon]
-            y_seq.append(y_temp)
-        return np.array(X_seq), np.array(y_seq)
-
-    @staticmethod
-    def __create_x_sequences(X, time_steps):
-        X_seq = []
-        for i in range(len(X) - time_steps + 1):
-            X_seq.append(X[i:i + time_steps])
-        return np.array(X_seq)
-
-    def create_train_val_data(self, _X_train_val_, _y_train_val_):
-        _X_train_, _X_val_, _y_train_, _y_val_ = train_test_split(_X_train_val_, _y_train_val_, test_size=PredictorConfig.SPLIT_RATIO, shuffle=False)
-
-        _X_train_ = self.scaler.fit_transform(_X_train_)[:, 4:]
-        _X_val_ = self.scaler.transform(_X_val_)[:, 4:]
-
-        _X_train_seq_, _y_train_seq_ = self.__create_x_y_sequences(_X_train_, _y_train_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
-        _X_val_seq_, _y_val_seq_ = self.__create_x_y_sequences(_X_val_, _y_val_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
-
-        return _X_train_seq_, _y_train_seq_, _X_val_seq_, _y_val_seq_
-
-
-    def create_rl_train_test_data(self, X):
-        x = self.scaler.transform(X)
-
-        _X_train_, _X_test_ = train_test_split(x, test_size=0.2, shuffle=False)
-        _X_train_seq = self.__create_x_sequences(X=_X_train_, time_steps=6 * 12)
-        _X_test_seq = self.__create_x_sequences(X=_X_test_, time_steps=6 * 12)
-
-        return _X_train_seq, _X_test_seq
-
 
     @staticmethod
     def __compute_time_since_last_event(event_series, init_value=288):
@@ -160,6 +123,39 @@ class Preprocessor:
                 df_test[glucose_col].values)
 
 
+    @staticmethod
+    def __create_x_y_sequences(X, y, time_steps, prediction_horizon, shift=1):
+        X_seq, y_seq = [], []
+        for i in range(0, len(X) - time_steps - prediction_horizon + 1, shift):
+            X_seq.append(X[i:i + time_steps])
+            if prediction_horizon > 0:
+                y_temp = y[i + time_steps:i + time_steps + prediction_horizon]
+                y_seq.append(y_temp)
+        return np.array(X_seq), np.array(y_seq)
+
+
+    def create_train_val_data(self, _X_train_val_, _y_train_val_):
+        _X_train_, _X_val_, _y_train_, _y_val_ = train_test_split(_X_train_val_, _y_train_val_, test_size=PredictorConfig.SPLIT_RATIO, shuffle=False)
+
+        _X_train_ = self.scaler.fit_transform(_X_train_)[:, 4:]
+        _X_val_ = self.scaler.transform(_X_val_)[:, 4:]
+
+        _X_train_seq_, _y_train_seq_ = self.__create_x_y_sequences(_X_train_, _y_train_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
+        _X_val_seq_, _y_val_seq_ = self.__create_x_y_sequences(_X_val_, _y_val_, PredictorConfig.TRAIN_WINDOW_SIZE, PredictorConfig.N_PREDICTION)
+
+        return _X_train_seq_, _y_train_seq_, _X_val_seq_, _y_val_seq_
+
+
+    def create_rl_train_test_data(self, X, y):
+        x = self.scaler.transform(X)
+
+        _X_train_, _X_test_, _y_train, _y_test_ = train_test_split(x, y, test_size=0.2, shuffle=False)
+        _X_train_seq_, _ = self.__create_x_y_sequences(X=_X_train_, y=_y_train, time_steps=6 * 12, prediction_horizon=0, shift=1)
+        _X_test_seq_, _y_test_seq_ = self.__create_x_y_sequences(X=_X_test_, y=_y_test_, time_steps=6 * 12, prediction_horizon=6 * 12 * 4, shift=12)
+
+        return _X_train_seq_, _X_test_seq_, _y_test_seq_
+
+
 class DataController:
     def __init__(self, dataset_name, patient_id):
         self.dataset_name = dataset_name
@@ -167,16 +163,11 @@ class DataController:
 
         self.__preprocessor = Preprocessor()
 
-        X_train, y_train, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
-        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, y_train)
+        X_history, self.y_history, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
+        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_history, self.y_history)
 
-        self.X_rl_train, self.X_rl_test = self.__preprocessor.create_rl_train_test_data(X_test)
+        self.X_rl_train, self.X_rl_test, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, y_test)
         self.X = self.X_rl_train[0][None, :, :]
-        # self.X_test = self.X_test[:PredictorConfig.TRAIN_WINDOW_SIZE]
-        # self.X_test = self.__preprocessor.scaler.transform(self.X_test)
-        # self.X_test = self.X_test[None, :, :]
-        #
-        # self.y_test = self.y_test[PredictorConfig.TRAIN_WINDOW_SIZE: PredictorConfig.TRAIN_WINDOW_SIZE + PredictorConfig.N_PREDICTION]
 
     def get_inverse_transform(self, data):
         return self.__preprocessor.scaler.inverse_transform(data)
@@ -242,6 +233,4 @@ class DataController:
         # Step 6: Scale and update
         final_scaled = self.get_transform(final_real)
         self.X[0] = final_scaled
-
-        print("\nWindow shifted and new predicted CGM appended to X_test.")
 

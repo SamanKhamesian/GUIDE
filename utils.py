@@ -1,6 +1,7 @@
 import os
 import random
 import re
+from collections import defaultdict
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -38,6 +39,24 @@ def numerical_sort_key(s):
     if numbers:
         return int(numbers[0])
     return s
+
+
+def cal_time_in_range(cgm_array):
+    cgm_array = np.array(cgm_array)
+    count = ((Threshold.HYPOGLYCEMIA <= cgm_array) & (cgm_array <= Threshold.HYPERGLYCEMIA)).sum()
+    return (count / len(cgm_array)) * 100
+
+
+def cal_time_below_range(cgm_array):
+    cgm_array = np.array(cgm_array)
+    count = (Threshold.HYPOGLYCEMIA > cgm_array).sum()
+    return (count / len(cgm_array)) * 100
+
+
+def cal_time_above_range(cgm_array):
+    cgm_array = np.array(cgm_array)
+    count = (cgm_array > Threshold.HYPERGLYCEMIA).sum()
+    return (count / len(cgm_array)) * 100
 
 
 def plot_rewards(reward_list, title="Reward per Step", save_path="test.png"):
@@ -86,20 +105,23 @@ def plot_cgm_levels(cgm_sequence, hour_series, title="Predicted CGM Levels", sav
     plt.show()
 
 
-def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, action_list, days, save_path_prefix=None):
+def plot_cgm_reward_action_with_legend(cgm_sequence, true_cgm_sequence, hour_series, reward_list, action_list, days, save_path_prefix=None):
     for day in range(days):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
         start = day * 24
         end = (day + 1) * 24
-
-        # Plot CGM
         day_length = 24 * 12
+
+        # CGM values
         cgm_day = np.array(cgm_sequence[day * day_length:(day + 1) * day_length])
         x_cgm = np.arange(day_length)
-
         ax1.plot(x_cgm, cgm_day, label="CGM", color="black")
 
-        # CGM Ranges
+        if true_cgm_sequence is not None:
+            true_cgm_day = np.array(true_cgm_sequence[day * day_length:(day + 1) * day_length])
+            ax1.plot(x_cgm, true_cgm_day, label="True CGM", color="maroon", linestyle="--", linewidth=1.5)
+
+        # Highlight ranges
         hypo_mask = cgm_day < Threshold.HYPOGLYCEMIA
         hyper_mask = cgm_day > Threshold.HYPERGLYCEMIA
         in_range_mask = ~hypo_mask & ~hyper_mask
@@ -110,32 +132,30 @@ def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, a
         ax1.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=0.5)
         ax1.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=0.5)
 
-        ax1.set_title(f"Day {day + 1} - CGM with Actions")
-        ax1.set_ylabel("CGM Value")
+        # Legends (split)
+        cgm_legend = ax1.legend(loc='upper right', fontsize=12)
+        ax1.add_artist(cgm_legend)
+
+        action_patches = [mpatches.Patch(color='green', label='Nothing'),
+                          mpatches.Patch(color='blue', label='Carbs (g)'),
+                          mpatches.Patch(color='red', label='Inject (U)')]
+
+        ax1.legend(handles=action_patches, loc='lower right', fontsize=12)
+
+        ax1.set_title(f"Results for Day {day + 1}", fontsize=16)
+        ax1.set_ylabel("CGM Level (mg/dL)", fontsize=14)
+        ax1.set_xlabel("Time of the day (Hour)", fontsize=14)
         ax1.grid(True)
 
-        # Plot Reward
+        # Reward plot
         reward_day = reward_list[start:end]
         x_reward = np.arange(0, day_length, 12)
-
         ax2.plot(x_reward, reward_day, label='Reward', color='orange')
-
-        # Use day-specific slice of hour_series
-        hour_day = hour_series[day * day_length:(day + 1) * day_length]
-
-        # For tick labels, show every hour (every 12 points = 1 hour)
-        tick_indices = np.arange(0, day_length, 12)
-        tick_labels = [str(int(hour_day[i])) for i in tick_indices]
-
-        ax2.set_xticks(tick_indices)
-        ax2.set_xticklabels(tick_labels)
-
-        ax2.set_title(f"Day {day + 1} - Reward with Actions")
-        ax2.set_ylabel("Reward")
-        ax2.set_xlabel("Time")
+        ax2.set_ylabel("Reward", fontsize=14)
+        ax2.set_xlabel("Time of the day (Hour)", fontsize=14)
         ax2.grid(True)
 
-        # Plot vertical lines for actions
+        # Action markers
         for i in range(start, end):
             action_type, action_value, action_time = action_list[i]
             x = (i - start) * 12 + int(action_time)
@@ -159,14 +179,136 @@ def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, a
                     y_pos = ylim[0] + 0.12 * (ylim[1] - ylim[0])
                     ax.text(x, y_pos, label, ha='center', va='bottom', fontsize=10, color=color)
 
-        # Legends
-        ax1.legend(loc='lower right')
-        ax2.legend(loc='upper right')
+        # Hour ticks and labels
+        hour_day = hour_series[day * day_length:(day + 1) * day_length]
+        tick_indices = np.arange(0, day_length, 12)
+        tick_labels = [str(int(hour_day[i])) for i in tick_indices]
 
-        action_patches = [mpatches.Patch(color='green', label='Nothing'), mpatches.Patch(color='blue', label='Eat'),
-                          mpatches.Patch(color='red', label='Inject')]
-        ax2.legend(handles=action_patches, loc='lower right')
+        ax2.set_xticks(tick_indices)
+        ax2.set_xticklabels(tick_labels, fontsize=14)
+
+        ax1.tick_params(axis='x',labelbottom=True, labelsize=14)
+        ax2.tick_params(axis='x', labelsize=14)
+        ax1.tick_params(axis='y', labelsize=14)
+        ax2.tick_params(axis='y', labelsize=14)
 
         plt.tight_layout()
-        plt.savefig(f"{save_path_prefix}_day_0{day + 1}.png", dpi=300)
+        plt.savefig(save_path_prefix, dpi=300)
         plt.show()
+
+
+def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Range Metrics Across Tests'):
+    days = np.arange(1, len(tir_list) + 1)
+    labels = [f'Test {i}' for i in days]
+
+    tir_list = np.array(tir_list)
+    tar_list = np.array(tar_list)
+    tbr_list = np.array(tbr_list)
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(days, tir_list, label='TIR', color='maroon', marker='o', linestyle='-')
+    plt.plot(days, tar_list, label='TAR', color='orange', marker='o', linestyle='--')
+    plt.plot(days, tbr_list, label='TBR', color='dodgerblue', marker='o', linestyle=':')
+
+    plt.xticks(days, labels, rotation=45)
+    plt.ylabel('Percentage (%)')
+    plt.ylim(0, 100)
+    plt.title(title)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.show()
+
+
+def plot_eat_action_distribution(test_actions, test_time_window, save_path):
+    hour_eat_counts = defaultdict(int)
+    hour_eat_amounts = defaultdict(list)
+    num_tests = len(test_actions)
+
+    for actions, time_window in zip(test_actions, test_time_window):
+        for i, (action_type, value, time_index) in enumerate(actions):
+            if action_type == 1:  # EAT
+                index_in_time = 12 * i + time_index
+                if index_in_time >= len(time_window):
+                    continue  # safety check
+                hour = int(time_window[index_in_time])
+                hour_eat_counts[hour] += 1
+                hour_eat_amounts[hour].append(value)
+
+    hours = list(range(24))
+    counts = [hour_eat_counts[h] for h in hours]
+    avg_amounts = [np.mean(hour_eat_amounts[h]) if hour_eat_amounts[h] else 0 for h in hours]
+    std_amounts = [np.std(hour_eat_amounts[h]) if hour_eat_amounts[h] else 0 for h in hours]
+
+    # Plot 1: Raw count of EAT events
+    plt.figure(figsize=(10, 5))
+    plt.bar(hours, counts, color='goldenrod')
+    plt.xlabel("Hour of Day")
+    plt.ylabel("Number of Meal Events")
+    plt.title(f"Distribution of Eat Actions by Hour Across {num_tests} Tests")
+    plt.xticks(hours)
+    plt.grid(axis='y', linestyle='--', alpha=0.9)
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/all_carb_distribution.png', dpi=300)
+    plt.show()
+
+    # Plot 2: Average carb amount with std dev
+    plt.figure(figsize=(10, 5))
+    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='dodgerblue', alpha=0.9,
+            error_kw=dict(ecolor='red', linewidth=1.5))
+    plt.xlabel("Hour of Day")
+    plt.ylabel("Average Carb Amount (g)")
+    plt.title(f"Average Carb Intake by Hour Across {num_tests} Tests")
+    plt.xticks(hours)
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/all_carb_amount.png', dpi=300)
+    plt.show()
+
+
+def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
+    hour_inject_counts = defaultdict(int)
+    hour_inject_amounts = defaultdict(list)
+    num_tests = len(test_actions)
+
+    for actions, time_window in zip(test_actions, test_time_window):
+        for i, (action_type, value, time_index) in enumerate(actions):
+            if action_type == 2:  # INJECT
+                index_in_time = 12 * i + time_index
+                if index_in_time >= len(time_window):
+                    continue
+                hour = int(time_window[index_in_time])
+                hour_inject_counts[hour] += 1
+                hour_inject_amounts[hour].append(value)
+
+    hours = list(range(24))
+    counts = [hour_inject_counts[h] for h in hours]
+    avg_amounts = [np.mean(hour_inject_amounts[h]) if hour_inject_amounts[h] else 0 for h in hours]
+    std_amounts = [np.std(hour_inject_amounts[h]) if hour_inject_amounts[h] else 0 for h in hours]
+
+    # Plot 1: Raw count of INJECT events
+    plt.figure(figsize=(10, 5))
+    plt.bar(hours, counts, color='darkred')
+    plt.xlabel("Hour of Day")
+    plt.ylabel("Number of Bolus Insulin Injections")
+    plt.title(f"Distribution of Bolus Insulin Injections by Hour Across {num_tests} Tests")
+    plt.xticks(hours)
+    plt.grid(axis='y', linestyle='--', alpha=0.9)
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/all_insulin_distribution.png', dpi=300)
+    plt.show()
+
+    # Plot 2: Average insulin amount with std dev
+    plt.figure(figsize=(10, 5))
+    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='mediumseagreen', alpha=0.9,
+            error_kw=dict(ecolor='black', linewidth=1.5))
+    plt.xlabel("Hour of Day")
+    plt.ylabel("Average Bolus Insulin Amount (units)")
+    plt.title(f"Average Bolus Insulin Injection by Hour Across {num_tests} Tests")
+    plt.xticks(hours)
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/all_insulin_amount.png', dpi=300)
+    plt.show()
