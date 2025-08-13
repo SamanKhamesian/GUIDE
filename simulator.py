@@ -30,7 +30,7 @@ class Simulator:
         full_real = self.data.get_inverse_transform(self.data.X[0])
         return bool(full_real[-1, 1])
 
-    def apply_action_to_inputs(self, full_current_window, action):
+    def apply_action_to_inputs(self, full_current_window, action, main_meal_action=None):
         action_type, value, time_index = action
         time_index = int(time_index)
 
@@ -59,6 +59,23 @@ class Simulator:
             bolus_array[time_index] = value
             for i in range(time_index, 12):
                 time_since_last_injection_array[i] = i - time_index
+
+        # Step 6: Apply the main meal action
+        if main_meal_action is not None:
+            _, m_value, m_time_index = main_meal_action
+            m_time_index = int(m_time_index)
+            carb_array[m_time_index] += m_value
+
+            meal_indices = [m_time_index]
+
+            if action_type == Action.EAT:
+                meal_indices.append(time_index)
+
+            meal_indices = sorted(set(meal_indices))
+
+            for idx in meal_indices:
+                for j in range(idx, 12):
+                    time_since_last_meal_array[j] = j - idx
 
         return (bolus_array, [time_since_last_injection] + time_since_last_injection_array,
                 carb_array, [time_since_last_meal] + time_since_last_meal_array)

@@ -149,11 +149,11 @@ class Preprocessor:
     def create_rl_train_test_data(self, X, y):
         x = self.scaler.transform(X)
 
-        _X_train_, _X_test_, _y_train, _y_test_ = train_test_split(x, y, test_size=0.2, shuffle=False)
-        _X_train_seq_, _ = self.__create_x_y_sequences(X=_X_train_, y=_y_train, time_steps=6 * 12, prediction_horizon=0, shift=1)
+        _X_train_, _X_test_, _y_train_, _y_test_ = train_test_split(x, y, test_size=0.2, shuffle=False)
+        _X_train_seq_, _ = self.__create_x_y_sequences(X=_X_train_, y=_y_train_, time_steps=6 * 12, prediction_horizon=0, shift=1)
         _X_test_seq_, _y_test_seq_ = self.__create_x_y_sequences(X=_X_test_, y=_y_test_, time_steps=6 * 12, prediction_horizon=6 * 12 * 4, shift=12)
 
-        return _X_train_seq_, _X_test_seq_, _y_test_seq_
+        return _X_train_seq_, _X_test_seq_, _y_train_, _y_test_seq_
 
 
 class DataController:
@@ -163,10 +163,11 @@ class DataController:
 
         self.__preprocessor = Preprocessor()
 
-        X_history, self.y_history, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
-        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_history, self.y_history)
+        X_train, y_train, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
+        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, y_train)
 
-        self.X_rl_train, self.X_rl_test, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, y_test)
+        self.X_rl_train, self.X_rl_test, self._y_rl_train_, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, y_test)
+
         self.X = self.X_rl_train[0][None, :, :]
 
     def get_inverse_transform(self, data):

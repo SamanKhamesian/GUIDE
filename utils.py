@@ -59,6 +59,20 @@ def cal_time_above_range(cgm_array):
     return (count / len(cgm_array)) * 100
 
 
+def select_main_meal_hours():
+    breakfast_hour = np.random.choice([7, 8, 9])
+    lunch_hour     = np.random.choice([12, 13, 14])
+    dinner_hour    = np.random.choice([19, 20, 21, 22])
+    return [breakfast_hour, lunch_hour, dinner_hour]
+
+
+def select_main_meal_portion(low, high, mean, sd):
+    while True:
+        x = np.random.normal(mean, sd)
+        if low <= x <= high:
+            return x
+
+
 def plot_rewards(reward_list, title="Reward per Step", save_path="test.png"):
     plt.figure(figsize=(12, 6))
     plt.plot(reward_list, label='Reward')
@@ -105,96 +119,122 @@ def plot_cgm_levels(cgm_sequence, hour_series, title="Predicted CGM Levels", sav
     plt.show()
 
 
-def plot_cgm_reward_action_with_legend(cgm_sequence, true_cgm_sequence, hour_series, reward_list, action_list, days, save_path_prefix=None):
-    for day in range(days):
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
-        start = day * 24
-        end = (day + 1) * 24
-        day_length = 24 * 12
+def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, action_list, test_index, main_meal_actions=None, save_path_prefix=None):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
+    start = 0
+    end = 24
+    day_length = 24 * 12
 
-        # CGM values
-        cgm_day = np.array(cgm_sequence[day * day_length:(day + 1) * day_length])
-        x_cgm = np.arange(day_length)
-        ax1.plot(x_cgm, cgm_day, label="CGM", color="black")
+    # CGM values
+    cgm_day = np.array(cgm_sequence[start * day_length:end * day_length])
+    x_cgm = np.arange(day_length)
 
-        if true_cgm_sequence is not None:
-            true_cgm_day = np.array(true_cgm_sequence[day * day_length:(day + 1) * day_length])
-            ax1.plot(x_cgm, true_cgm_day, label="True CGM", color="maroon", linestyle="--", linewidth=1.5)
+    # Highlight ranges
+    hypo_mask = cgm_day < Threshold.HYPOGLYCEMIA
+    hyper_mask = cgm_day > Threshold.HYPERGLYCEMIA
+    in_range_mask = ~hypo_mask & ~hyper_mask
 
-        # Highlight ranges
-        hypo_mask = cgm_day < Threshold.HYPOGLYCEMIA
-        hyper_mask = cgm_day > Threshold.HYPERGLYCEMIA
-        in_range_mask = ~hypo_mask & ~hyper_mask
-        ax1.plot(x_cgm[hypo_mask], cgm_day[hypo_mask], 'r-', label='Hypoglycemia')
-        ax1.plot(x_cgm[hyper_mask], cgm_day[hyper_mask], 'orange', label='Hyperglycemia')
-        ax1.plot(x_cgm[in_range_mask], cgm_day[in_range_mask], 'g-', label='In Range')
+    ax1.plot(x_cgm, cgm_day, color="gray", linestyle='--')
 
-        ax1.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=0.5)
-        ax1.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=0.5)
+    def plot_continuous_segments(x, y, mask, color, label):
+        segments = []
+        current = []
+        for i in range(len(mask)):
+            if mask[i]:
+                current.append(i)
+            elif current:
+                segments.append(current)
+                current = []
+        if current:
+            segments.append(current)
 
-        # Legends (split)
-        cgm_legend = ax1.legend(loc='upper right', fontsize=12)
-        ax1.add_artist(cgm_legend)
+        if segments:
+            for i, segment in enumerate(segments):
+                ax1.plot(x[segment], y[segment], color=color, label=label if i == 0 else None)
+        else:
+            ax1.plot([], [], color=color, label=label)
 
-        action_patches = [mpatches.Patch(color='green', label='Nothing'),
-                          mpatches.Patch(color='blue', label='Carbs (g)'),
-                          mpatches.Patch(color='red', label='Inject (U)')]
+    plot_continuous_segments(x_cgm, cgm_day, hypo_mask, 'red', 'Hypoglycemia')
+    plot_continuous_segments(x_cgm, cgm_day, hyper_mask, 'orange', 'Hyperglycemia')
+    plot_continuous_segments(x_cgm, cgm_day, in_range_mask, 'green', 'In Range')
 
-        ax1.legend(handles=action_patches, loc='lower right', fontsize=12)
+    ax1.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=0.5)
+    ax1.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=0.5)
 
-        ax1.set_title(f"Results for Day {day + 1}", fontsize=16)
-        ax1.set_ylabel("CGM Level (mg/dL)", fontsize=14)
-        ax1.set_xlabel("Time of the day (Hour)", fontsize=14)
-        ax1.grid(True)
+    ax1.set_title(f"Results for Test {test_index}", fontsize=16)
+    ax1.set_ylabel("CGM Level (mg/dL)", fontsize=14)
+    ax1.set_xlabel("Time of the day (Hour)", fontsize=14)
+    ax1.grid(True)
 
-        # Reward plot
-        reward_day = reward_list[start:end]
-        x_reward = np.arange(0, day_length, 12)
-        ax2.plot(x_reward, reward_day, label='Reward', color='orange')
-        ax2.set_ylabel("Reward", fontsize=14)
-        ax2.set_xlabel("Time of the day (Hour)", fontsize=14)
-        ax2.grid(True)
+    # Reward plot
+    reward_day = reward_list[start:end]
+    x_reward = np.arange(0, day_length, 12)
+    ax2.plot(x_reward, reward_day, label='Reward', color='orange')
+    ax2.set_ylabel("Reward", fontsize=14)
+    ax2.set_xlabel("Time of the day (Hour)", fontsize=14)
+    ax2.grid(True)
 
-        # Action markers
-        for i in range(start, end):
-            action_type, action_value, action_time = action_list[i]
-            x = (i - start) * 12 + int(action_time)
+    # Action markers
+    for i in range(start, end):
+        action_type, action_value, action_time = action_list[i]
+        x = (i - start) * 12 + int(action_time)
 
-            if action_type == 0:
-                color = 'green'
-                label = None
-            elif action_type == 1:
-                color = 'blue'
-                label = f"{action_value:.1f}"
-            elif action_type == 2:
-                color = 'red'
-                label = f"{action_value:.1f}"
-            else:
-                continue
+        if action_type == 0:
+            color = 'green'
+            label = None
+        elif action_type == 1:
+            color = 'blue'
+            label = f"{action_value:.1f}"
+        elif action_type == 2:
+            color = 'red'
+            label = f"{action_value:.1f}"
+        else:
+            continue
+
+        for ax in [ax1, ax2]:
+            ax.axvline(x=x, ymin=0, ymax=0.1, color=color, linewidth=1.5)
+            if label and ax == ax1:
+                ylim = ax.get_ylim()
+                y_pos = ylim[0] + 0.12 * (ylim[1] - ylim[0])
+                ax.text(x, y_pos, label, ha='center', va='bottom', fontsize=10, color=color)
+
+    # Plot main meal actions (if any)
+    if main_meal_actions:
+        for step_index, action_type, action_value, action_time in main_meal_actions:
+            x = step_index * 12 + int(action_time)
 
             for ax in [ax1, ax2]:
-                ax.axvline(x=x, ymin=0, ymax=0.1, color=color, linewidth=1)
-                if label and ax == ax1:
+                ax.axvline(x=x, ymin=0, ymax=0.1, color='m', linewidth=1.5)
+                if ax == ax1:
                     ylim = ax.get_ylim()
                     y_pos = ylim[0] + 0.12 * (ylim[1] - ylim[0])
-                    ax.text(x, y_pos, label, ha='center', va='bottom', fontsize=10, color=color)
+                    ax.text(x, y_pos, f"{action_value:.1f}", ha='center', va='bottom', fontsize=10, color='m')
 
-        # Hour ticks and labels
-        hour_day = hour_series[day * day_length:(day + 1) * day_length]
-        tick_indices = np.arange(0, day_length, 12)
-        tick_labels = [str(int(hour_day[i])) for i in tick_indices]
+    # Hour ticks and labels
+    hour_day = hour_series[start * day_length:end * day_length]
+    tick_indices = np.arange(0, day_length, 12)
+    tick_labels = [str(int(hour_day[i])) for i in tick_indices]
 
-        ax2.set_xticks(tick_indices)
-        ax2.set_xticklabels(tick_labels, fontsize=14)
+    ax2.set_xticks(tick_indices)
+    ax2.set_xticklabels(tick_labels, fontsize=14)
 
-        ax1.tick_params(axis='x',labelbottom=True, labelsize=14)
-        ax2.tick_params(axis='x', labelsize=14)
-        ax1.tick_params(axis='y', labelsize=14)
-        ax2.tick_params(axis='y', labelsize=14)
+    ax1.tick_params(axis='x', labelbottom=True, labelsize=14)
+    ax2.tick_params(axis='x', labelsize=14)
+    ax1.tick_params(axis='y', labelsize=14)
+    ax2.tick_params(axis='y', labelsize=14)
 
-        plt.tight_layout()
-        plt.savefig(save_path_prefix, dpi=300)
-        plt.show()
+    # Legends (split)
+    cgm_legend = ax1.legend(loc='upper right', fontsize=12)
+    ax1.add_artist(cgm_legend)
+
+    action_patches = [mpatches.Patch(color='green', label='Nothing'), mpatches.Patch(color='blue', label='Carbs (g)'),
+        mpatches.Patch(color='red', label='Inject (U)'), mpatches.Patch(color='purple', label='Meal (g)')]
+
+    ax1.legend(handles=action_patches, loc='lower right', fontsize=12)
+
+    plt.tight_layout()
+    plt.savefig(f"{save_path_prefix}/test_{test_index}_results.png", dpi=300)
+    plt.show()
 
 
 def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Range Metrics Across Tests'):

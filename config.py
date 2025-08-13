@@ -27,7 +27,7 @@ class PredictorConfig:
 class TD3Config:
     MAX_EPISODES = 10
     MAX_STEPS_PER_EPISODE = 24
-    TRAINING_STEPS = 10_000
+    TRAINING_STEPS = 6_000
     TESTING_STEPS = 24
     BATCH_SIZE = 256
     NUM_TRAIN_INIT_STATE = 50
@@ -42,23 +42,14 @@ class TD3Config:
     LEARNING_RATE = 3e-4
 
     STATE_SIZE = 6 * 12 * 8 # 8 features, and 6-hour data for each
-    CARB_RANGE = (5, 100)
-    INSULIN_RANGE = (1, 10)
+    CARB_RANGE = (5, 50)
+    INSULIN_RANGE = (2, 15)
 
 
 # Reward Function Shaping for TD3-BC Model
 class TD3RewardShaping:
     IDEAL_CGM = 125
     WEIGHTS = [100, 11.0, 1.09018]
-
-    DO_NOTHING_IN_SLEEP = 50
-    DO_NOTHING_BONUS = 20
-    REPEATED_ACTION_PENALTY = 30
-    EAT_COUNT_REWARD = 60
-
-    EARLY_MEAL_PENALTY = 50
-    EARLY_INJECTION_PENALTY = 50
-    GOOD_MEAL_TIMING_BONUS = 50
 
     HYPO_HYPER_1_PENALTY = 50
     HYPO_HYPER_2_PENALTY = 100

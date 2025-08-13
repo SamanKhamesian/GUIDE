@@ -8,7 +8,7 @@ from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution)
+                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion)
 
 
 class EnvironmentAdvanced:
@@ -24,13 +24,12 @@ class EnvironmentAdvanced:
         self.full_current_window = self.get_window()
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)  # (type, value, time_index)
+        self.main_meal_hours = select_main_meal_hours()
+        self.main_meal_action_log = []
         self.repeat_counter = 0
-        self.meal_counter = 0
         self.time_series = self.get_time_series()
         self.current_hour = self.get_current_hour()
         self.sleep_mode = self.get_sleep_signal()
-
-        # Track CGM history per episode
         self.episode_cgm_history = []
 
     def get_window(self):
@@ -55,27 +54,35 @@ class EnvironmentAdvanced:
         self.full_current_window = self.get_window()
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)
+        self.main_meal_hours = select_main_meal_hours()
+        self.main_meal_action_log = []
         self.repeat_counter = 0
-        self.meal_counter = 0
         self.time_series = self.get_time_series()
         self.current_hour = self.get_current_hour()
         self.sleep_mode = self.get_sleep_signal()
-
-        # Reset CGM history at the beginning of each episode
         self.episode_cgm_history = []
 
         return self.current_state
 
-    def step(self, action):
+    def step(self, step_idx, action):
         # Step 1: Predict next CGM values
         predicted_cgm = self.simulator.predict_next_cgm()
+        main_meal_action = None
 
         # Step 2: Track predicted CGM values per step
         self.episode_cgm_history.extend(predicted_cgm)
 
+        # Step 2.5: Add possible main meal action
+        if (int(self.current_hour + 1) % 24) in self.main_meal_hours:
+            main_meal_hour = self.current_hour + 1
+            main_meal_size = select_main_meal_portion(20, 100, mean=65, sd=15)
+            t_index = np.random.randint(0, 12)
+            main_meal_action = (Action.EAT, main_meal_size, t_index)
+            self.main_meal_action_log.append((step_idx, Action.EAT, main_meal_size, t_index))
+
         # Step 3: Apply action to simulator
         bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = (
-            self.simulator.apply_action_to_inputs(self.full_current_window, action))
+            self.simulator.apply_action_to_inputs(self.full_current_window, action, main_meal_action))
 
         # Step 4: Commit inputs and predicted CGM
         self.simulator.commit_next_input(predicted_cgm, bolus_array, time_since_last_injection_array[1:], carb_array, time_since_last_meal_array[1:])
@@ -98,78 +105,97 @@ class EnvironmentAdvanced:
 
         mean_cgm = predicted_cgm.mean()
 
+        # Identify glycemic ranges
         hypo = predicted_cgm < Threshold.HYPOGLYCEMIA
         hyper = predicted_cgm > Threshold.HYPERGLYCEMIA
         normal = ~hypo & ~hyper
 
-        # Extract weights
+        # Extract reward weights for different glycemic zones
         w_normal = TD3RewardShaping.WEIGHTS[0]
         w_hypo = TD3RewardShaping.WEIGHTS[1]
         w_hyper = TD3RewardShaping.WEIGHTS[2]
 
-        # Piecewise reward components
+        # Compute reward for each CGM point based on zone
         reward = np.zeros_like(predicted_cgm)
         normal_vals = predicted_cgm[normal]
 
-        # TEST 2
+        # Penalize hypoglycemia proportionally
         reward[hypo] = -w_hypo * (Threshold.HYPOGLYCEMIA - predicted_cgm[hypo])
+
+        # Penalize hyperglycemia proportionally
         reward[hyper] = -w_hyper * (predicted_cgm[hyper] - Threshold.HYPERGLYCEMIA)
+
+        # Reward normal CGM values, peaking at IDEAL_CGM (125)
         reward[normal] = np.where(normal_vals <= TD3RewardShaping.IDEAL_CGM,
                                   (normal_vals - Threshold.HYPOGLYCEMIA) / (TD3RewardShaping.IDEAL_CGM - Threshold.HYPOGLYCEMIA) * w_normal,
                                   (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - TD3RewardShaping.IDEAL_CGM) * w_normal)
 
+        # Aggregate reward across all time steps
         total_reward = np.sum(reward)
 
+        # Update time since last meal and insulin for this time slot
         time_since_last_meal = time_since_last_meal_array[time_index] + 1
         time_since_last_insulin = time_since_last_injection_array[time_index] + 1
 
+        # During sleep, reward doing nothing and penalize any action
         if self.sleep_mode:
             if action_type != Action.NOTHING:
-                total_reward -= TD3RewardShaping.DO_NOTHING_IN_SLEEP
+                total_reward -= 50
             else:
-                total_reward += TD3RewardShaping.DO_NOTHING_IN_SLEEP
+                total_reward += 50
 
-        if action_type == Action.NOTHING and np.all(predicted_cgm > 120) and np.all(predicted_cgm < 140):
-            total_reward += TD3RewardShaping.DO_NOTHING_BONUS  # encourages stability
+        # Bonus for maintaining CGM in stable, healthy range without action
+        if action_type == Action.NOTHING and 120 < mean_cgm < 140:
+            total_reward += 10
 
+        # Penalize not injecting insulin when hyperglycemia is severe
+        if action_type != Action.INJECT and mean_cgm > 185:
+            total_reward -= (mean_cgm - 185) * 20
+
+        # Penalize not eating when CGM is low
+        if action_type != Action.EAT and mean_cgm < 110:
+            total_reward -= 30
+
+        # Evaluate insulin action
         if action_type == Action.INJECT:
+            # Penalize injecting when CGM is already low
             if mean_cgm < 150:
-                total_reward -= (150 - mean_cgm) * 10
+                total_reward -= (150 - mean_cgm) * 5
 
-            elif mean_cgm > 190:
-                total_reward += (mean_cgm - 190) * 10
+            # Reward insulin if CGM is high
+            if mean_cgm > 175:
+                total_reward += (mean_cgm - 175) * 20
 
-            if time_since_last_insulin < 2 * 12:
-                total_reward -= TD3RewardShaping.EARLY_INJECTION_PENALTY
+            # Penalize too frequent insulin injections
+            if time_since_last_insulin < 18:
+                total_reward -= 50
 
+            # Reward timely insulin after a recent meal (within 1 hour)
             if time_since_last_meal <= 12:
-                total_reward += TD3RewardShaping.GOOD_MEAL_TIMING_BONUS
+                total_reward += 75
 
+        # Evaluate meal action
         if action_type == Action.EAT:
-            self.meal_counter += 1
+            # Reward eating when CGM is low
+            if mean_cgm < 100:
+                total_reward += 100
 
-            if not self.sleep_mode:
-                total_reward += TD3RewardShaping.GOOD_MEAL_TIMING_BONUS
+            # Penalize eating too soon after a previous meal if CGM is still high
+            if mean_cgm > 170 and time_since_last_meal < 2 * 12:
+                total_reward -= 50
 
-            if mean_cgm < 110:
-                total_reward += (110 - mean_cgm) * 10
-
-            if time_since_last_meal < 12 or time_since_last_meal > 6 * 12:
-                total_reward -= TD3RewardShaping.EARLY_MEAL_PENALTY
-
-            elif 12 <= time_since_last_meal <= 6 * 12:
-                total_reward += TD3RewardShaping.GOOD_MEAL_TIMING_BONUS
-
-            if time_since_last_insulin < 2 * 12:
-                # good timing
-                total_reward += TD3RewardShaping.GOOD_MEAL_TIMING_BONUS
+            # Reward eating after recent insulin injection (may prevent hypo)
+            if time_since_last_insulin < 12:
+                total_reward += 50
             else:
-                # insulin was too long ago, then maybe it missed the chance (still some reward, but less)
-                total_reward += TD3RewardShaping.GOOD_MEAL_TIMING_BONUS * 0.2
+                # Small bonus even if insulin wasn't recent
+                total_reward += 10
 
-        if self.repeat_counter >= 1:
-            total_reward -= TD3RewardShaping.REPEATED_ACTION_PENALTY
+        # Penalize repeated eating or injecting behavior
+        if self.repeat_counter >= 2:
+            total_reward -= (self.repeat_counter - 1) * 100
 
+        # Update repeat counter based on current action
         if self.prev_action[0] == action_type and action_type != Action.NOTHING:
             self.repeat_counter += 1
         else:
@@ -219,11 +245,6 @@ class EnvironmentAdvanced:
         # Duration penalty (additional fine-tuning, optional but recommended)
         episode_reward -= (hypo_duration + hyper_duration) * 0.5  # penalty per minute outside range
 
-        if 3 <= self.meal_counter <= 6:
-            episode_reward += TD3RewardShaping.EAT_COUNT_REWARD
-        else:
-            episode_reward -= TD3RewardShaping.EAT_COUNT_REWARD
-
         return episode_reward
 
 
@@ -244,7 +265,7 @@ def fill_replay_buffer(env, buffer):
                 action_vector = np.array([probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
                 action = (action_type, carb_amount if action_type == 1 else insulin_amount, time_index)
 
-                next_state, _, _, reward, _, _ = env.step(action)
+                next_state, _, _, reward, _, _ = env.step(step, action)
 
                 episode_states.append(state)
                 episode_actions.append(action_vector)
@@ -276,22 +297,22 @@ def test_td3_bc(env, agent, max_action, folder_path):
         os.makedirs(folder_path)
 
     log_path = os.path.join(folder_path, "eval_results.txt")
+    if os.path.isfile(log_path):
+        os.remove(log_path)
 
     test_rewards, test_cgms, test_actions, test_time_window = [], [], [], []
     test_tir, test_tar, test_tbr = [], [], []
-    true_tir, true_tar, true_tbr = [], [], []
 
-    y_history = env.simulator.data.y_history
+    y_history = env.simulator.data._y_rl_train_
 
     for i in range(TD3Config.NUM_TEST_INIT_STATE):
         state = env.reset(state_index=i, is_testing=True)
 
         total_reward = 0
         rewards, predicted_cgms, actions, time_window = [], [], [], []
-        y_true = env.simulator.data.y_rl_test[i]
 
         print(f"\n--------------------- Test {i + 1} ---------------------",)
-        for _ in range(TD3Config.TESTING_STEPS):
+        for step in range(TD3Config.TESTING_STEPS):
             raw_action = agent.select_action(state)
             raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
 
@@ -304,7 +325,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
             mapped_value = carb_amt if mapped_type == 1 else insulin_amt if mapped_type == 2 else 0.0
 
             action = (mapped_type, mapped_value, mapped_time)
-            state, predicted_cgm, time_series, reward, _, _ = env.step(action)
+            state, predicted_cgm, time_series, reward, _, _ = env.step(step, action)
 
             total_reward += reward
             rewards.append(reward)
@@ -312,9 +333,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
             predicted_cgms.extend(predicted_cgm)
             time_window.extend(time_series)
 
-            print(f"Generated action: Type={mapped_type}, Value={mapped_value:.2f}, Time Index={mapped_time}")
-            print(f"Calculated reward: {reward:.2f}")
-
+        main_meal_actions = env.main_meal_action_log.copy()
         episode_end_reward = env.compute_episode_reward()
         total_reward += episode_end_reward
 
@@ -326,7 +345,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
         print(f"\n-------------- Results for Test {i + 1} ---------------\n")
         print(f"Episode-end reward: {episode_end_reward:.2f}")
         print(f"Evaluation reward: {total_reward - episode_end_reward:.2f}")
-        print(f"Total Evaluation reward (including episode-end): {total_reward:.2f}")
+        print(f"Total Evaluation reward: {total_reward:.2f}")
 
         tir = cal_time_in_range(predicted_cgms)
         tar = cal_time_above_range(predicted_cgms)
@@ -340,74 +359,68 @@ def test_td3_bc(env, agent, max_action, folder_path):
         print(f"Time-above-Range: {tar:.2f}%")
         print(f"Time-below-Range: {tbr:.2f}%")
 
-        _true_tir = cal_time_in_range(y_true)
-        _true_tar = cal_time_above_range(y_true)
-        _true_tbr = cal_time_below_range(y_true)
-
-        true_tir.append(_true_tir)
-        true_tar.append(_true_tar)
-        true_tbr.append(_true_tbr)
-
-        print(f"\nTrue Time-in-Range : {_true_tir:.2f}%")
-        print(f"True Time-above-Range: {_true_tar:.2f}%")
-        print(f"True Time-below-Range: {_true_tbr:.2f}%")
-
         plot_cgm_reward_action_with_legend(cgm_sequence=predicted_cgms,
-                                           true_cgm_sequence=None,
                                            hour_series=time_window,
                                            reward_list=rewards,
                                            action_list=actions,
-                                           days=1,
-                                           save_path_prefix=f"{folder_path}/test_{i + 1}_results.png")
+                                           test_index=i + 1,
+                                           main_meal_actions=main_meal_actions,
+                                           save_path_prefix=folder_path)
 
-    print(f"\nHistory Time-in-Range: {cal_time_in_range(y_history):.2f}%")
-    print(f"History Time-above-Range: {cal_time_above_range(y_history):.2f}%")
-    print(f"History Time-below-Range: {cal_time_below_range(y_history):.2f}%")
+        with open(log_path, "a") as f:
+            f.write(f"\n--------------------- Results for Test {i + 1} ----------------------\n")
+            f.write(f"\nEpisode-end reward: {episode_end_reward:.2f}\n")
+            f.write(f"Evaluation reward: {total_reward - episode_end_reward:.2f}\n")
+            f.write(f"Total Evaluation reward: {total_reward:.2f}\n")
+            f.write(f"\nTime-in-Range   : {tir:.2f}%\n")
+            f.write(f"Time-above-Range: {tar:.2f}%\n")
+            f.write(f"Time-below-Range: {tbr:.2f}%\n")
 
-    evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, test_tir, test_tar, test_tbr, true_tir, true_tar, true_tbr, folder_path)
+    evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path)
 
 
-def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, test_tir, test_tar, test_tbr, true_tir, true_tar, true_tbr, folder_path):
-    print(f"\n----------------- Final Results ------------------\n")
+def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path):
+    print(f"\n----------------- Final Results ------------------")
 
     # TIR
     avg_tir = np.mean(test_tir)
     std_tir = np.std(test_tir)
     med_tir = np.median(test_tir)
 
-    avg_true_tir = np.mean(true_tir)
-    std_true_tir = np.std(true_tir)
-    med_true_tir = np.median(true_tir)
-
     # TAR
     avg_tar = np.mean(test_tar)
     std_tar = np.std(test_tar)
     med_tar = np.median(test_tar)
-
-    avg_true_tar = np.mean(true_tar)
-    std_true_tar = np.std(true_tar)
-    med_true_tar = np.median(true_tar)
 
     # TBR
     avg_tbr = np.mean(test_tbr)
     std_tbr = np.std(test_tbr)
     med_tbr = np.median(test_tbr)
 
-    avg_true_tbr = np.mean(true_tbr)
-    std_true_tbr = np.std(true_tbr)
-    med_true_tbr = np.median(true_tbr)
-
-    plot_tir_tbr_tar(test_tir, test_tar, test_tbr, save_path=f'{folder_path}/all_tir.png')
+    plot_tir_tbr_tar(test_tir, test_tar, test_tbr, save_path=f'{folder_path}/all_tests.png')
     plot_eat_action_distribution(test_actions, test_time_window, save_path=folder_path)
     plot_insulin_action_distribution(test_actions, test_time_window, save_path=folder_path)
 
-    print(f"Time-in-Range (TIR)   : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%")
-    print(f"Time-above-Range (TAR): {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%")
-    print(f"Time-below-Range (TBR): {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%")
+    print(f"\nAverage Time-in-Range (TIR)   : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%")
+    print(f"Average Time-above-Range (TAR): {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%")
+    print(f"Average Time-below-Range (TBR): {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%")
 
-    print(f"\nTrue Time-in-Rage (TTIR): {avg_true_tir:.2f}% (± {std_true_tir:.2f}%), Median: {med_true_tir:.2f}%)")
-    print(f"True Time-above_Range (TTAR): {avg_true_tar:.2f}% (± {std_true_tar:.2f}%), Median: {med_true_tar:.2f}%)")
-    print(f"True Time-below_Range (TTBR): {avg_true_tbr:.2f}% (± {std_true_tbr:.2f}%), Median: {med_true_tbr:.2f}%)")
+    print(f"\nHistory Time-in-Range (TIR)   : {cal_time_in_range(y_history):.2f}%")
+    print(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%")
+    print(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%")
+
+    with open(log_path, "a") as f:
+        # Summary statistics block
+        f.write("\n----------- Summary Time-in-Range Stats Across Tests -----------\n")
+        f.write(f"Average Time-in-Range (TIR)   : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%\n")
+        f.write(f"Average Time-above-Range (TAR): {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%\n")
+        f.write(f"Average Time-below-Range (TBR): {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%\n")
+
+        # History block
+        f.write("\n---------------- Historical Time-in-Range Stats ----------------\n")
+        f.write(f"History Time-in-Range (TIR)   : {cal_time_in_range(y_history):.2f}%\n")
+        f.write(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%\n")
+        f.write(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%\n")
 
 
 def main(dataset_name, patient_id):
