@@ -1,4 +1,5 @@
 import os
+import pickle
 
 import numpy as np
 import torch
@@ -8,7 +9,8 @@ from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion)
+                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion,
+                   compute_event_corr, plot_event_corr, evaluate_action_success, print_and_save_action_eval)
 
 
 class EnvironmentAdvanced:
@@ -421,6 +423,18 @@ def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window
         f.write(f"History Time-in-Range (TIR)   : {cal_time_in_range(y_history):.2f}%\n")
         f.write(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%\n")
         f.write(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%\n")
+
+    corr_2x2 = compute_event_corr(test_cgms=test_cgms, test_actions=test_actions)
+    plot_event_corr(corr_2x2, folder_path)
+
+    with open(f"{folder_path}/event_corr.pkl", "wb") as f:
+        pickle.dump(corr_2x2, f)
+
+    res_eat_hypo = evaluate_action_success(test_cgms, test_actions, 100, '<', Action.EAT)
+    res_inject_hyper = evaluate_action_success(test_cgms, test_actions, 175, '>', Action.INJECT)
+
+    print_and_save_action_eval("Injection on Hyperglycemia", res_inject_hyper, log_path)
+    print_and_save_action_eval("Meal on Hypoglycemia", res_eat_hypo, log_path)
 
 
 def main(dataset_name, patient_id):
