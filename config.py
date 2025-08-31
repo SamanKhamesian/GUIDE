@@ -49,7 +49,7 @@ class TD3Config:
 # Reward Function Shaping for TD3-BC Model
 class TD3RewardShaping:
     IDEAL_CGM = 125
-    WEIGHTS = [100, 11.0, 1.09018]
+    WEIGHTS = [100, 7.0, 1.09018]
 
     HYPO_HYPER_1_PENALTY = 50
     HYPO_HYPER_2_PENALTY = 100

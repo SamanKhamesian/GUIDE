@@ -1,16 +1,14 @@
 import os
-import pickle
 
 import numpy as np
 import torch
 
-from config import Action, Threshold, TD3Config, TD3RewardShaping, DataConfig
+from config import Action, Threshold, TD3Config, TD3RewardShaping
 from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion,
-                   compute_event_corr, plot_event_corr, evaluate_action_success, print_and_save_action_eval)
+                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion)
 
 
 class EnvironmentAdvanced:
@@ -76,7 +74,6 @@ class EnvironmentAdvanced:
 
         # Step 2.5: Add possible main meal action
         if (int(self.current_hour + 1) % 24) in self.main_meal_hours:
-            main_meal_hour = self.current_hour + 1
             main_meal_size = select_main_meal_portion(20, 100, mean=65, sd=15)
             t_index = np.random.randint(0, 12)
             main_meal_action = (Action.EAT, main_meal_size, t_index)
@@ -90,6 +87,7 @@ class EnvironmentAdvanced:
         self.simulator.commit_next_input(predicted_cgm, bolus_array, time_since_last_injection_array[1:], carb_array, time_since_last_meal_array[1:])
 
         # Step 5: Update state
+        self.full_current_window = self.get_window()
         self.current_state = self.get_state()
         self.time_series = self.get_time_series()
         self.current_hour = self.get_current_hour()
@@ -107,6 +105,10 @@ class EnvironmentAdvanced:
 
         mean_cgm = predicted_cgm.mean()
 
+        x = np.arange(len(predicted_cgm))
+        y = predicted_cgm
+        slope, _ = np.polyfit(x, y, 1)
+
         # Identify glycemic ranges
         hypo = predicted_cgm < Threshold.HYPOGLYCEMIA
         hyper = predicted_cgm > Threshold.HYPERGLYCEMIA
@@ -116,6 +118,7 @@ class EnvironmentAdvanced:
         w_normal = TD3RewardShaping.WEIGHTS[0]
         w_hypo = TD3RewardShaping.WEIGHTS[1]
         w_hyper = TD3RewardShaping.WEIGHTS[2]
+        ideal_cgm = TD3RewardShaping.IDEAL_CGM
 
         # Compute reward for each CGM point based on zone
         reward = np.zeros_like(predicted_cgm)
@@ -127,10 +130,9 @@ class EnvironmentAdvanced:
         # Penalize hyperglycemia proportionally
         reward[hyper] = -w_hyper * (predicted_cgm[hyper] - Threshold.HYPERGLYCEMIA)
 
-        # Reward normal CGM values, peaking at IDEAL_CGM (125)
-        reward[normal] = np.where(normal_vals <= TD3RewardShaping.IDEAL_CGM,
-                                  (normal_vals - Threshold.HYPOGLYCEMIA) / (TD3RewardShaping.IDEAL_CGM - Threshold.HYPOGLYCEMIA) * w_normal,
-                                  (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - TD3RewardShaping.IDEAL_CGM) * w_normal)
+        reward[normal] = np.where(normal_vals <= ideal_cgm,
+                                  (normal_vals - Threshold.HYPOGLYCEMIA) / (ideal_cgm - Threshold.HYPOGLYCEMIA) * w_normal,
+                                  (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - ideal_cgm) * w_normal)
 
         # Aggregate reward across all time steps
         total_reward = np.sum(reward)
@@ -142,56 +144,52 @@ class EnvironmentAdvanced:
         # During sleep, reward doing nothing and penalize any action
         if self.sleep_mode:
             if action_type != Action.NOTHING:
-                total_reward -= 50
+                total_reward -= 100
             else:
-                total_reward += 50
+                total_reward += 100
 
         # Bonus for maintaining CGM in stable, healthy range without action
         if action_type == Action.NOTHING and 120 < mean_cgm < 140:
-            total_reward += 10
+            total_reward += 50  # increased from 25
 
         # Penalize not injecting insulin when hyperglycemia is severe
         if action_type != Action.INJECT and mean_cgm > 185:
             total_reward -= (mean_cgm - 185) * 20
 
         # Penalize not eating when CGM is low
-        if action_type != Action.EAT and mean_cgm < 110:
-            total_reward -= 30
+        if action_type != Action.EAT and mean_cgm < 100:
+            total_reward -= (100 - mean_cgm) * 2
 
         # Evaluate insulin action
         if action_type == Action.INJECT:
             # Penalize injecting when CGM is already low
             if mean_cgm < 150:
-                total_reward -= (150 - mean_cgm) * 5
+                total_reward -= (150 - mean_cgm) * 10
 
             # Reward insulin if CGM is high
-            if mean_cgm > 175:
-                total_reward += (mean_cgm - 175) * 20
+            if mean_cgm > 185:
+                total_reward += (mean_cgm - 185) * 20
 
-            # Penalize too frequent insulin injections
-            if time_since_last_insulin < 18:
-                total_reward -= 50
+            if time_since_last_insulin < 2 * 12:  # increased from 18
+                total_reward -= 100
 
-            # Reward timely insulin after a recent meal (within 1 hour)
-            if time_since_last_meal <= 12:
+            if time_since_last_meal <= 18 and mean_cgm > 140 and slope > 0:
                 total_reward += 75
 
         # Evaluate meal action
         if action_type == Action.EAT:
             # Reward eating when CGM is low
-            if mean_cgm < 100:
-                total_reward += 100
+            if mean_cgm < 100 and slope < 0:
+                total_reward += (100 - mean_cgm) * 3
 
-            # Penalize eating too soon after a previous meal if CGM is still high
-            if mean_cgm > 170 and time_since_last_meal < 2 * 12:
-                total_reward -= 50
+            if mean_cgm > 150 and time_since_last_meal < 2 * 12:
+                total_reward -= 100
 
             # Reward eating after recent insulin injection (may prevent hypo)
             if time_since_last_insulin < 12:
-                total_reward += 50
+                total_reward += 25  # reduced from 50
             else:
-                # Small bonus even if insulin wasn't recent
-                total_reward += 10
+                total_reward += 5  # reduced from 10
 
         # Penalize repeated eating or injecting behavior
         if self.repeat_counter >= 2:
@@ -424,24 +422,13 @@ def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window
         f.write(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%\n")
         f.write(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%\n")
 
-    corr_2x2 = compute_event_corr(test_cgms=test_cgms, test_actions=test_actions)
-    plot_event_corr(corr_2x2, folder_path)
-
-    with open(f"{folder_path}/event_corr.pkl", "wb") as f:
-        pickle.dump(corr_2x2, f)
-
-    res_eat_hypo = evaluate_action_success(test_cgms, test_actions, 100, '<', Action.EAT)
-    res_inject_hyper = evaluate_action_success(test_cgms, test_actions, 175, '>', Action.INJECT)
-
-    print_and_save_action_eval("Injection on Hyperglycemia", res_inject_hyper, log_path)
-    print_and_save_action_eval("Meal on Hypoglycemia", res_eat_hypo, log_path)
-
 
 def main(dataset_name, patient_id):
     env = EnvironmentAdvanced(dataset_name=dataset_name, patient_id=patient_id)
     device = torch.device("cpu")
     folder_path = f'./td3_bc_model/tests/azt1d/{dataset_name}_patient_{patient_id}'
 
+    min_action = np.array([0.0, 0.0, 0.0, TD3Config.CARB_RANGE[0], TD3Config.INSULIN_RANGE[0], 0.0])
     max_action = np.array([1.0, 1.0, 1.0, TD3Config.CARB_RANGE[1], TD3Config.INSULIN_RANGE[1], 11.0])
 
     agent = TD3_BC(state_dim=TD3Config.STATE_SIZE, action_dim=len(max_action), max_action=max_action, device=device)
@@ -454,4 +441,5 @@ def main(dataset_name, patient_id):
 
 if __name__ == "__main__":
     set_seed(42)
-    main(dataset_name=DataConfig.DATASET, patient_id=DataConfig.PATIENT_ID)
+    # for i in ["540", "544", "552", "559", "563", "567", "570", "575", "584", "588", "591", "596"]:
+    main(dataset_name="azt1d", patient_id=str(20))

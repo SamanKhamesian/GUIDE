@@ -27,7 +27,7 @@ class Preprocessor:
                 last_event_idx = i
             time_since.append(i - last_event_idx)
 
-        return time_since
+        return np.array(time_since, dtype=int)
 
     def create_input_features(self, dataset_name, patient_id):
         if dataset_name == "ohio":
@@ -193,17 +193,17 @@ class DataController:
         future_12_source = original_real[-12:]
 
         # Step 3: Prepare 12 new rows (from predicted CGM + inputs)
-        hour_array = future_12_source[-12:, 0].copy()
+        hour_array = np.round(future_12_source[-12:, 0]).astype(int)
         basal_array = future_12_source[-12:, 6].copy()
 
         # Count how many times the last hour appears
-        last_hour = int(hour_array[-1])
+        last_hour = hour_array[-1]
         count = np.sum(hour_array == last_hour)
         remaining = 12 - count
 
         # Generate next 12-hour values
         next_12_hours = [last_hour] * remaining + [(last_hour + 1) % 24] * (12 - remaining)
-        next_12_sleep_flags = [1.0 if (h >= SleepTime.BED_TIME or h < SleepTime.WAKE_UP) else 0.0 for h in next_12_hours]
+        next_12_sleep_flags = [1.0 if (SleepTime.BED_TIME <= h <= SleepTime.WAKE_UP) else 0.0 for h in next_12_hours]
 
         # MA calculation
         new_MA_input = []

@@ -1,3 +1,5 @@
+import numpy as np
+
 from config import Action, PredictorConfig
 from predictor import Predictor
 from preprocess import DataController
@@ -24,11 +26,11 @@ class Simulator:
 
     def get_time_window(self):
         full_real = self.data.get_inverse_transform(self.data.X[0])
-        return full_real[-12:, 0]
+        return np.round(full_real[-12:, 0]).astype(int)
 
     def get_sleep_mode(self):
         full_real = self.data.get_inverse_transform(self.data.X[0])
-        return bool(full_real[-1, 1])
+        return bool(round(full_real[-1, 1]))
 
     def apply_action_to_inputs(self, full_current_window, action, main_meal_action=None):
         action_type, value, time_index = action
@@ -38,8 +40,8 @@ class Simulator:
         full_real = self.data.get_inverse_transform(full_current_window)
 
         # Step 2: Get previous time-since values (from last row)
-        time_since_last_meal = full_real[-1, 2]
-        time_since_last_injection = full_real[-1, 3]
+        time_since_last_meal = int(round(full_real[-1, 2]))
+        time_since_last_injection = int(round(full_real[-1, 3]))
 
         # Step 3: Initialize zero lists
         carb_array = [0.0] * 12

@@ -339,6 +339,7 @@ def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, a
     ax1.set_title(f"Results for Test {test_index}", fontsize=16)
     ax1.set_ylabel("CGM Level (mg/dL)", fontsize=14)
     ax1.set_xlabel("Time of the day (Hour)", fontsize=14)
+    ax1.set_ylim(0, 300)
     ax1.grid(True)
 
     # Reward plot
@@ -405,7 +406,7 @@ def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, a
     action_patches = [mpatches.Patch(color='green', label='Nothing'), mpatches.Patch(color='blue', label='Eat (g)'),
         mpatches.Patch(color='red', label='Inject (U)'), mpatches.Patch(color='m', label='Meal (g)')]
 
-    ax1.legend(handles=action_patches, loc='lower right', fontsize=12)
+    ax1.legend(handles=action_patches, loc='upper left', fontsize=12)
 
     plt.tight_layout()
     plt.savefig(f"{save_path_prefix}/test_{test_index}_results.png", dpi=300)

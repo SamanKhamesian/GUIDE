@@ -1,9 +1,10 @@
+import tensorflow as tf
+from tensorflow.keras import backend as K
 from tensorflow.keras.layers import Conv1D, Dropout, LSTM, Flatten, Dense
 from tensorflow.keras.models import Sequential
-from tensorflow.keras import backend as K
-import tensorflow as tf
 
 from config import PredictorConfig, Threshold
+
 
 def create_loss_function(w_normal, w_hypo, w_hyper):
     def custom_loss(y_true, y_pred):
