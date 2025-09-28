@@ -76,8 +76,8 @@ class Preprocessor:
         df_test["hour"] = df_test["timestamp"].dt.hour
 
         # Sleep
-        df_train["sleep"] = np.where((df_train["hour"] >= SleepTime.BED_TIME) | (df_train["hour"] < SleepTime.WAKE_UP), 1.0, 0.0)
-        df_test["sleep"] = np.where((df_test["hour"] >= SleepTime.BED_TIME) | (df_test["hour"] < SleepTime.WAKE_UP), 1.0, 0.0)
+        df_train["sleep"] = np.where((df_train["hour"] >= SleepTime.BED_TIME) & (df_train["hour"] <= SleepTime.WAKE_UP), 1.0, 0.0)
+        df_test["sleep"] = np.where((df_test["hour"] >= SleepTime.BED_TIME) & (df_test["hour"] <= SleepTime.WAKE_UP), 1.0, 0.0)
 
         # Time since the last meal
         df_train["time_since_last_meal"] = self.__compute_time_since_last_event(df_train[carb_col].values)
@@ -150,8 +150,8 @@ class Preprocessor:
         x = self.scaler.transform(X)
 
         _X_train_, _X_test_, _y_train_, _y_test_ = train_test_split(x, y, test_size=0.2, shuffle=False)
-        _X_train_seq_, _ = self.__create_x_y_sequences(X=_X_train_, y=_y_train_, time_steps=6 * 12, prediction_horizon=0, shift=1)
-        _X_test_seq_, _y_test_seq_ = self.__create_x_y_sequences(X=_X_test_, y=_y_test_, time_steps=6 * 12, prediction_horizon=6 * 12 * 4, shift=12)
+        _X_train_seq_, _ = self.__create_x_y_sequences(X=_X_train_, y=_y_train_, time_steps=6 * 12, prediction_horizon=0, shift=12)
+        _X_test_seq_, _y_test_seq_ = self.__create_x_y_sequences(X=_X_test_, y=_y_test_, time_steps=6 * 12, prediction_horizon=0, shift=12)
 
         return _X_train_seq_, _X_test_seq_, _y_train_, _y_test_seq_
 
@@ -183,7 +183,7 @@ class DataController:
         EMA_new = (new_data - EMA_old) * alpha + EMA_old
         return EMA_new
 
-    def commit_shift(self, predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
+    def commit_shift(self, predicted_cgm, basal_array, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
         # Step 1: Get the current unscaled window
         original_real = self.get_inverse_transform(self.X[0])  # shape: (72, 10)
 
@@ -194,7 +194,6 @@ class DataController:
 
         # Step 3: Prepare 12 new rows (from predicted CGM + inputs)
         hour_array = np.round(future_12_source[-12:, 0]).astype(int)
-        basal_array = future_12_source[-12:, 6].copy()
 
         # Count how many times the last hour appears
         last_hour = hour_array[-1]

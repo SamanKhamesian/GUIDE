@@ -8,7 +8,7 @@ from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution, select_main_meal_hours, select_main_meal_portion)
+                   plot_eat_action_distribution, plot_insulin_action_distribution, count_glycemic_events)
 
 
 class EnvironmentAdvanced:
@@ -16,15 +16,15 @@ class EnvironmentAdvanced:
         self.simulator = Simulator(dataset_name=dataset_name, patient_id=patient_id)
         self.simulator.train()
 
-        # 8 features, and 6-hour data for each
-        # features: [hour, sleep, time_since_last_meal, time_since_last_insulin, carbs, bolus, basal, cgm]
+        # 7 features, and 6-hour data for each
+        # features: [hour, sleep, time_since_last_meal, time_since_last_insulin, carbs, bolus, cgm]
         self.state_size = TD3Config.STATE_SIZE
         self.action_space = [Action.NOTHING, Action.EAT, Action.INJECT]
 
         self.full_current_window = self.get_window()
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)  # (type, value, time_index)
-        self.main_meal_hours = select_main_meal_hours()
+        self.main_meal_hours = self.set_main_meal_hours()
         self.main_meal_action_log = []
         self.repeat_counter = 0
         self.time_series = self.get_time_series()
@@ -37,7 +37,9 @@ class EnvironmentAdvanced:
 
     def get_state(self):
         window = self.get_window()
-        return window[:, :8].flatten()
+        # remove basal from state (it's only been in the glimmer input)
+        window = np.delete(window, 6, axis=1)
+        return window[:, :7].flatten()
 
     def get_time_series(self):
         return self.simulator.get_time_window()
@@ -48,13 +50,19 @@ class EnvironmentAdvanced:
     def get_sleep_signal(self):
         return self.simulator.get_sleep_mode()
 
+    def set_main_meal_hours(self):
+        return self.simulator.select_main_meal_hours()
+
+    def set_main_mean_portion(self):
+        return self.simulator.select_main_meal_portion(20, 100, mean=65, sd=15)
+
     def reset(self, state_index, is_testing):
         self.simulator.reset(state_index, is_testing)
 
         self.full_current_window = self.get_window()
         self.current_state = self.get_state()
         self.prev_action = (Action.NOTHING, 0.0, 0)
-        self.main_meal_hours = select_main_meal_hours()
+        self.main_meal_hours = self.set_main_meal_hours()
         self.main_meal_action_log = []
         self.repeat_counter = 0
         self.time_series = self.get_time_series()
@@ -74,17 +82,24 @@ class EnvironmentAdvanced:
 
         # Step 2.5: Add possible main meal action
         if (int(self.current_hour + 1) % 24) in self.main_meal_hours:
-            main_meal_size = select_main_meal_portion(20, 100, mean=65, sd=15)
+            main_meal_size = self.set_main_mean_portion()
             t_index = np.random.randint(0, 12)
             main_meal_action = (Action.EAT, main_meal_size, t_index)
             self.main_meal_action_log.append((step_idx, Action.EAT, main_meal_size, t_index))
+
+        basal_array = [self.simulator.heuristic_basal_controller(predicted_cgm)] * 12
 
         # Step 3: Apply action to simulator
         bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = (
             self.simulator.apply_action_to_inputs(self.full_current_window, action, main_meal_action))
 
         # Step 4: Commit inputs and predicted CGM
-        self.simulator.commit_next_input(predicted_cgm, bolus_array, time_since_last_injection_array[1:], carb_array, time_since_last_meal_array[1:])
+        self.simulator.commit_next_input(predicted_cgm,
+                                         basal_array,
+                                         bolus_array,
+                                         time_since_last_injection_array[1:],
+                                         carb_array,
+                                         time_since_last_meal_array[1:])
 
         # Step 5: Update state
         self.full_current_window = self.get_window()
@@ -154,21 +169,21 @@ class EnvironmentAdvanced:
 
         # Penalize not injecting insulin when hyperglycemia is severe
         if action_type != Action.INJECT and mean_cgm > 185:
-            total_reward -= (mean_cgm - 185) * 20
+            total_reward -= min(2000, (mean_cgm - 185) * 20)
 
         # Penalize not eating when CGM is low
-        if action_type != Action.EAT and mean_cgm < 100:
-            total_reward -= (100 - mean_cgm) * 2
+        if action_type != Action.EAT and mean_cgm < 90:
+            total_reward -= min(200, (90 - mean_cgm) * 5)
 
         # Evaluate insulin action
         if action_type == Action.INJECT:
             # Penalize injecting when CGM is already low
             if mean_cgm < 150:
-                total_reward -= (150 - mean_cgm) * 10
+                total_reward -= min(500, (150 - mean_cgm) * 10)
 
             # Reward insulin if CGM is high
             if mean_cgm > 185:
-                total_reward += (mean_cgm - 185) * 20
+                total_reward += min(2000, (mean_cgm - 185) * 20)
 
             if time_since_last_insulin < 2 * 12:  # increased from 18
                 total_reward -= 100
@@ -179,8 +194,8 @@ class EnvironmentAdvanced:
         # Evaluate meal action
         if action_type == Action.EAT:
             # Reward eating when CGM is low
-            if mean_cgm < 100 and slope < 0:
-                total_reward += (100 - mean_cgm) * 3
+            if mean_cgm < 90:
+                total_reward += min(200, (90 - mean_cgm) * 5)
 
             if mean_cgm > 150 and time_since_last_meal < 2 * 12:
                 total_reward -= 100
@@ -191,16 +206,18 @@ class EnvironmentAdvanced:
             else:
                 total_reward += 5  # reduced from 10
 
-        # Penalize repeated eating or injecting behavior
-        if self.repeat_counter >= 2:
-            total_reward -= (self.repeat_counter - 1) * 100
-
         # Update repeat counter based on current action
         if self.prev_action[0] == action_type and action_type != Action.NOTHING:
             self.repeat_counter += 1
+
+            # Penalize repeated eating or injecting behavior
+            if self.repeat_counter >= 2:
+                total_reward -= (self.repeat_counter - 1) * 950
+
         else:
             self.repeat_counter = 0
 
+        total_reward = total_reward / 1000.0
         return total_reward
 
     def compute_episode_reward(self):
@@ -209,8 +226,8 @@ class EnvironmentAdvanced:
         # Compute daily metrics clearly:
         tir_ratio = cal_time_in_range(cgm_array)
 
-        hypo_events = np.sum(cgm_array < Threshold.HYPOGLYCEMIA)
-        hyper_events = np.sum(cgm_array > Threshold.HYPERGLYCEMIA)
+        hypo_events = count_glycemic_events(data=list(cgm_array), threshold=Threshold.HYPERGLYCEMIA, mode='hypo')
+        hyper_events = count_glycemic_events(data=list(cgm_array), threshold=Threshold.HYPERGLYCEMIA, mode='hyper')
 
         # Calculate event duration (in 5-minute intervals)
         hypo_duration = np.sum(cgm_array < Threshold.HYPOGLYCEMIA) * 5
@@ -220,7 +237,7 @@ class EnvironmentAdvanced:
         episode_reward = 0
 
         # Reward/Penalty for TIR (daily)
-        episode_reward += (10 * (tir_ratio - 70))
+        episode_reward += (20 * (tir_ratio - 70))
 
         # Penalty for hypo events
         if hypo_events == 0:
@@ -243,8 +260,9 @@ class EnvironmentAdvanced:
             episode_reward -= TD3RewardShaping.HYPO_HYPER_3_PENALTY
 
         # Duration penalty (additional fine-tuning, optional but recommended)
-        episode_reward -= (hypo_duration + hyper_duration) * 0.5  # penalty per minute outside range
+        episode_reward -= ((hypo_duration + hyper_duration) * 0.5)  # penalty per minute outside range
 
+        episode_reward = episode_reward / 1000.0
         return episode_reward
 
 
@@ -311,7 +329,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
         total_reward = 0
         rewards, predicted_cgms, actions, time_window = [], [], [], []
 
-        print(f"\n--------------------- Test {i + 1} ---------------------",)
+        print(f"\n--------------------- Test {i + 1} ---------------------", )
         for step in range(TD3Config.TESTING_STEPS):
             raw_action = agent.select_action(state)
             raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
@@ -426,7 +444,7 @@ def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window
 def main(dataset_name, patient_id):
     env = EnvironmentAdvanced(dataset_name=dataset_name, patient_id=patient_id)
     device = torch.device("cpu")
-    folder_path = f'./td3_bc_model/tests/azt1d/{dataset_name}_patient_{patient_id}'
+    folder_path = f'./td3_bc_model/tests/final/behavioral/{dataset_name}_patient_{patient_id}'
 
     min_action = np.array([0.0, 0.0, 0.0, TD3Config.CARB_RANGE[0], TD3Config.INSULIN_RANGE[0], 0.0])
     max_action = np.array([1.0, 1.0, 1.0, TD3Config.CARB_RANGE[1], TD3Config.INSULIN_RANGE[1], 11.0])
@@ -442,4 +460,6 @@ def main(dataset_name, patient_id):
 if __name__ == "__main__":
     set_seed(42)
     # for i in ["540", "544", "552", "559", "563", "567", "570", "575", "584", "588", "591", "596"]:
+    #     main(dataset_name="ohio", patient_id=str(i))
+    # for i in [2, 4, 5, 6, 7, 13, 15, 18, 22, 25]:
     main(dataset_name="azt1d", patient_id=str(20))

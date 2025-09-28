@@ -32,6 +32,44 @@ class Simulator:
         full_real = self.data.get_inverse_transform(self.data.X[0])
         return bool(round(full_real[-1, 1]))
 
+    @staticmethod
+    def select_main_meal_hours():
+        breakfast_hour = np.random.choice([7, 8, 9])
+        lunch_hour = np.random.choice([12, 13, 14])
+        dinner_hour = np.random.choice([19, 20, 21, 22])
+        return [breakfast_hour, lunch_hour, dinner_hour]
+
+    @staticmethod
+    def select_main_meal_portion(low, high, mean, sd):
+        while True:
+            x = np.random.normal(mean, sd)
+            if low <= x <= high:
+                return x
+
+    @staticmethod
+    def heuristic_basal_controller(predicted_cgm):
+        """
+        Heuristic controller for basal insulin using piecewise linear logic:
+        - 0.0 U/hr if predicted CGM < 70
+        - Linear increase from 0.0 to 1.0 between CGM 70–100
+        - Flat 1.0 U/hr between CGM 100–180
+        - Linear increase from 1.0 to 2.0 between CGM 180–250
+        - Clipped to 2.0 U/hr for CGM > 250
+        """
+
+        avg_cgm = np.mean(predicted_cgm)
+
+        if avg_cgm <= 70:
+            return 0.0
+        elif avg_cgm <= 100:
+            return np.interp(avg_cgm, [70, 100], [0.0, 1.0])
+        elif avg_cgm <= 180:
+            return 1.0
+        elif avg_cgm <= 250:
+            return np.interp(avg_cgm, [180, 250], [1.0, 2.0])
+        else:
+            return 2.0
+
     def apply_action_to_inputs(self, full_current_window, action, main_meal_action=None):
         action_type, value, time_index = action
         time_index = int(time_index)
@@ -82,8 +120,8 @@ class Simulator:
         return (bolus_array, [time_since_last_injection] + time_since_last_injection_array,
                 carb_array, [time_since_last_meal] + time_since_last_meal_array)
 
-    def commit_next_input(self, predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
-        self.data.commit_shift(predicted_cgm, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array)
+    def commit_next_input(self, predicted_cgm, basal_array, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array):
+        self.data.commit_shift(predicted_cgm, basal_array, bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array)
 
     def reset(self, state_index, is_testing=False):
         print("\nResetting simulator...")

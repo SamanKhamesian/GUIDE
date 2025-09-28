@@ -60,18 +60,31 @@ def cal_time_above_range(cgm_array):
     return (count / len(cgm_array)) * 100
 
 
-def select_main_meal_hours():
-    breakfast_hour = np.random.choice([7, 8, 9])
-    lunch_hour     = np.random.choice([12, 13, 14])
-    dinner_hour    = np.random.choice([19, 20, 21, 22])
-    return [breakfast_hour, lunch_hour, dinner_hour]
+def count_glycemic_events(data, threshold, mode='hyper'):
+    if mode == 'hyper':
+        condition = data[0] > threshold
+    elif mode == 'hypo':
+        condition = data[0] < threshold
+    else:
+        raise ValueError("Invalid mode. Use 'hyper' for hyperglycemia or 'hypo' for hypoglycemia.")
 
+    count = int(condition)
 
-def select_main_meal_portion(low, high, mean, sd):
-    while True:
-        x = np.random.normal(mean, sd)
-        if low <= x <= high:
-            return x
+    for value in data:
+        if mode == 'hyper':
+            if value > threshold and not condition:
+                count += 1
+                condition = True
+            elif value <= threshold and condition:
+                condition = False
+        elif mode == 'hypo':
+            if value < threshold and not condition:
+                count += 1
+                condition = True
+            elif value >= threshold and condition:
+                condition = False
+
+    return count
 
 
 def evaluate_action_success(test_cgms, test_actions, threshold, direction, target_action_type):

@@ -25,23 +25,24 @@ class PredictorConfig:
 
 # TD3_BC Model Configuration
 class TD3Config:
-    MAX_EPISODES = 10
+    MAX_EPISODES = 20
     MAX_STEPS_PER_EPISODE = 24
-    TRAINING_STEPS = 6_000
+    TRAINING_STEPS = 10_000
     TESTING_STEPS = 24
     BATCH_SIZE = 256
-    NUM_TRAIN_INIT_STATE = 50
+    NUM_TRAIN_INIT_STATE = 100
     NUM_TEST_INIT_STATE = 10
 
-    GAMMA = 0.99
+    GAMMA = 0.98
     TAU = 0.005
-    ALPHA = 2.5
+    ALPHA = 1.5
     NOISE_CLIP = 0.5
     POLICY_NOISE = 0.2
     POLICY_FREQ = 2
-    LEARNING_RATE = 3e-4
+    ACTOR_LEARNING_RATE = 3e-4
+    CRITIC_LEARNING_RATE = 1e-4
 
-    STATE_SIZE = 6 * 12 * 8 # 8 features, and 6-hour data for each
+    STATE_SIZE = 6 * 12 * 7 # 8 features, and 6-hour data for each
     CARB_RANGE = (5, 50)
     INSULIN_RANGE = (2, 15)
 
@@ -49,11 +50,11 @@ class TD3Config:
 # Reward Function Shaping for TD3-BC Model
 class TD3RewardShaping:
     IDEAL_CGM = 125
-    WEIGHTS = [100, 7.0, 1.09018]
+    WEIGHTS = [100, 7.0, 2.0]
 
-    HYPO_HYPER_1_PENALTY = 50
-    HYPO_HYPER_2_PENALTY = 100
-    HYPO_HYPER_3_PENALTY = 200
+    HYPO_HYPER_1_PENALTY = 100
+    HYPO_HYPER_2_PENALTY = 200
+    HYPO_HYPER_3_PENALTY = 300
 
 
 # Reward Function Shaping for PPO Model

@@ -44,11 +44,11 @@ class TD3_BC:
 
         self.actor = Actor(state_dim, action_dim, max_action).to(device)
         self.actor_target = copy.deepcopy(self.actor)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=TD3Config.LEARNING_RATE)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=TD3Config.ACTOR_LEARNING_RATE)
 
         self.critic = Critic(state_dim, action_dim).to(device)
         self.critic_target = copy.deepcopy(self.critic)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=TD3Config.LEARNING_RATE)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=TD3Config.CRITIC_LEARNING_RATE)
 
         self.gamma = TD3Config.GAMMA
         self.tau = TD3Config.TAU
