@@ -8,7 +8,8 @@ from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution, count_glycemic_events)
+                   plot_eat_action_distribution, plot_insulin_action_distribution, count_glycemic_events, extract_behavior_features_from_actions,
+                   extract_patient_behavior_features, plot_behavior_radar)
 
 
 class EnvironmentAdvanced:
@@ -318,10 +319,12 @@ def test_td3_bc(env, agent, max_action, folder_path):
     if os.path.isfile(log_path):
         os.remove(log_path)
 
-    test_rewards, test_cgms, test_actions, test_time_window = [], [], [], []
+    test_rewards, test_cgms, test_actions, test_time_window, test_behavioral_features = [], [], [], [], []
     test_tir, test_tar, test_tbr = [], [], []
 
-    y_history = env.simulator.data._y_rl_train_
+    y_history = env.simulator.data.y_history
+    x_history = env.simulator.data.X_history
+    patient_behavioral_features = extract_patient_behavior_features(x_history)
 
     for i in range(TD3Config.NUM_TEST_INIT_STATE):
         state = env.reset(state_index=i, is_testing=True)
@@ -354,6 +357,9 @@ def test_td3_bc(env, agent, max_action, folder_path):
         main_meal_actions = env.main_meal_action_log.copy()
         episode_end_reward = env.compute_episode_reward()
         total_reward += episode_end_reward
+
+        agent_features = extract_behavior_features_from_actions(actions, main_meal_actions)
+        test_behavioral_features.append(agent_features)
 
         test_rewards.append(total_reward)
         test_cgms.append(predicted_cgms)
@@ -395,6 +401,15 @@ def test_td3_bc(env, agent, max_action, folder_path):
             f.write(f"Time-below-Range: {tbr:.2f}%\n")
 
     evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path)
+
+    if test_behavioral_features:
+        avg_features = {}
+        keys = test_behavioral_features[0].keys()
+        for key in keys:
+            values = [f[key] for f in test_behavioral_features]
+            avg_features[key] = round(np.mean(values), 2)
+
+        plot_behavior_radar(patient_behavioral_features, avg_features, save_path=folder_path)
 
 
 def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path):

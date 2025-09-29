@@ -6,6 +6,7 @@ from collections import defaultdict
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 import torch
 from scipy.stats import pearsonr
@@ -58,6 +59,101 @@ def cal_time_above_range(cgm_array):
     cgm_array = np.array(cgm_array)
     count = (cgm_array > Threshold.HYPERGLYCEMIA).sum()
     return (count / len(cgm_array)) * 100
+
+
+def extract_behavior_features_from_actions(actions, main_meal_actions):
+    bolus_events = []
+    snack_meal_events = []
+
+    # Process hourly actions (snacks + boluses)
+    for hour in range(len(actions)):
+        a, v, idx = actions[hour]
+        abs_time = hour + idx / 12.0
+
+        if a == Action.INJECT:
+            bolus_events.append((abs_time, v))
+        elif a == Action.EAT:
+            snack_meal_events.append((abs_time, v))
+
+    # Process main meals separately
+    main_meal_events = [(hour + idx / 12.0, v) for hour, _, v, idx in main_meal_actions]
+
+    # Combine all meals for counts and carb totals
+    all_meals = snack_meal_events + main_meal_events
+
+    meals_per_day = len(all_meals)
+    boluses_per_day = len(bolus_events)
+    total_bolus = sum(v for _, v in bolus_events)
+    total_carb = sum(v for _, v in all_meals)
+    total_insulin_per_day = total_bolus
+    bolus_to_carb_ratio = total_bolus / total_carb if total_carb > 0 else 0.0
+
+    meal_times = sorted(t for t, _ in all_meals)
+    if len(meal_times) >= 2:
+        meal_diffs = np.diff(meal_times) * 60
+        avg_meal_gap = np.mean(meal_diffs)
+    else:
+        avg_meal_gap = 0.0
+
+    bolus_times = sorted(t for t, _ in bolus_events)
+    if len(bolus_times) >= 2:
+        bolus_diffs = np.diff(bolus_times) * 60
+        avg_bolus_gap = np.mean(bolus_diffs)
+    else:
+        avg_bolus_gap = 0.0
+
+    return {"Number of Injections": round(boluses_per_day, 2),
+            "Total Bolus Units": round(total_insulin_per_day, 2),
+            "Number of Meals": round(meals_per_day, 2),
+            "Total Carb Size": round(total_carb, 2),
+            "Bolus to Carb Ratio": round(bolus_to_carb_ratio, 2),
+            "Meal Gap \n(min)": round(avg_meal_gap, 2),
+            "Bolus Gap \n(min)": round(avg_bolus_gap, 2)}
+
+
+def extract_patient_behavior_features(x_patient):
+    df = pd.DataFrame(x_patient,
+                      columns=['timestamp', 'hour', 'sleep', 'time_since_last_meal', 'time_since_last_insulin', 'carb', 'bolus', 'basal', 'glucose',
+                          'ga_200', 'cgm_class'])
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["date"] = df["timestamp"].dt.date
+    df["carb"] = df["carb"].astype(float)
+    df["bolus"] = df["bolus"].astype(float)
+
+    meal_events = df[df["carb"] > 0].copy().sort_values("timestamp")
+    bolus_events = df[df["bolus"] > 0].copy().sort_values("timestamp")
+
+    # Per-day stats
+    meals_per_day = meal_events.groupby("date").size().mean()
+    boluses_per_day = bolus_events.groupby("date").size().mean()
+    total_carb_per_day = meal_events.groupby("date")["carb"].sum().mean()
+    total_bolus_per_day = bolus_events.groupby("date")["bolus"].sum().mean()
+    bolus_to_carb_ratio = total_bolus_per_day / total_carb_per_day if total_carb_per_day > 0 else 0.0
+
+    # NEW: Avg time between meals (entire dataset)
+    meal_times = meal_events["timestamp"].values
+    if len(meal_times) >= 2:
+        meal_diffs = np.diff(meal_times).astype('timedelta64[m]').astype(int)
+        avg_meal_gap = np.mean(meal_diffs)
+    else:
+        avg_meal_gap = 0.0
+
+    # NEW: Avg time between injections (entire dataset)
+    bolus_times = bolus_events["timestamp"].values
+    if len(bolus_times) >= 2:
+        bolus_diffs = np.diff(bolus_times).astype('timedelta64[m]').astype(int)
+        avg_bolus_gap = np.mean(bolus_diffs)
+    else:
+        avg_bolus_gap = 0.0
+
+    return {"Number of Injections": round(boluses_per_day, 2),
+            "Total Bolus Units": round(total_bolus_per_day, 2),
+            "Number of Meals": round(meals_per_day, 2),
+            "Total Carb Size": round(total_carb_per_day, 2),
+            "Bolus to Carb Ratio": round(bolus_to_carb_ratio, 2),
+            "Meal Gap \n(min)": round(avg_meal_gap, 2),
+            "Bolus Gap \n(min)": round(avg_bolus_gap, 2)}
 
 
 def count_glycemic_events(data, threshold, mode='hyper'):
@@ -122,13 +218,9 @@ def evaluate_action_success(test_cgms, test_actions, threshold, direction, targe
 
     # Use np.nan instead of 0.0 to indicate undefined precision/recall
     precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
-    recall    = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+    recall = tp / (tp + fn) if (tp + fn) > 0 else np.nan
 
-    return {
-        "TP": tp, "FP": fp, "FN": fn, "TN": tn,
-        "Precision": precision,
-        "Recall": recall
-    }
+    return {"TP": tp, "FP": fp, "FN": fn, "TN": tn, "Precision": precision, "Recall": recall}
 
 
 def print_and_save_action_eval(title, result_dict, log_path):
@@ -169,7 +261,6 @@ def print_and_save_action_eval(title, result_dict, log_path):
         f.write(f"Recall         : {fmt(recall)}\n")
 
 
-
 def __safe_corr(x, y):
     if len(x) != len(y) or len(x) == 0:
         return 0.0
@@ -179,6 +270,7 @@ def __safe_corr(x, y):
     if np.isnan(r):
         return 0.0
     return r
+
 
 def compute_event_corr(test_cgms, test_actions):
     """
@@ -216,22 +308,19 @@ def compute_event_corr(test_cgms, test_actions):
 
     # Event masks from reward logic
     insulin_desired = (mean_cgm_hourly > 165).astype(int)
-    meal_desired    = (mean_cgm_hourly < 120).astype(int)
+    meal_desired = (mean_cgm_hourly < 120).astype(int)
 
     # Action masks
-    eat_actions    = (action_types_hourly == Action.EAT).astype(int)
+    eat_actions = (action_types_hourly == Action.EAT).astype(int)
     inject_actions = (action_types_hourly == Action.INJECT).astype(int)
 
     # Correlations
-    corr_insulin_eat    = __safe_corr(insulin_desired, eat_actions)
+    corr_insulin_eat = __safe_corr(insulin_desired, eat_actions)
     corr_insulin_inject = __safe_corr(insulin_desired, inject_actions)
-    corr_meal_eat       = __safe_corr(meal_desired,    eat_actions)
-    corr_meal_inject    = __safe_corr(meal_desired,    inject_actions)
+    corr_meal_eat = __safe_corr(meal_desired, eat_actions)
+    corr_meal_inject = __safe_corr(meal_desired, inject_actions)
 
-    mat = np.array([
-        [corr_insulin_eat,   corr_insulin_inject],
-        [corr_meal_eat,      corr_meal_inject ],
-    ], dtype=float)
+    mat = np.array([[corr_insulin_eat, corr_insulin_inject], [corr_meal_eat, corr_meal_inject], ], dtype=float)
 
     return np.nan_to_num(mat, nan=0.0)
 
@@ -247,8 +336,10 @@ def plot_event_corr(corr_matrix, save_path):
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(corr_matrix, vmin=-1, vmax=1)
 
-    ax.set_xticks(np.arange(len(cols)));  ax.set_xticklabels(cols)
-    ax.set_yticks(np.arange(len(rows)));  ax.set_yticklabels(rows)
+    ax.set_xticks(np.arange(len(cols)));
+    ax.set_xticklabels(cols)
+    ax.set_yticks(np.arange(len(rows)));
+    ax.set_yticklabels(rows)
 
     for i in range(2):
         for j in range(2):
@@ -307,7 +398,13 @@ def plot_cgm_levels(cgm_sequence, hour_series, title="Predicted CGM Levels", sav
     plt.show()
 
 
-def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, action_list, test_index, main_meal_actions=None, save_path_prefix=None):
+def plot_cgm_reward_action_with_legend(cgm_sequence,
+                                       hour_series,
+                                       reward_list,
+                                       action_list,
+                                       test_index,
+                                       main_meal_actions=None,
+                                       save_path_prefix=None):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
     start = 0
     end = 24
@@ -417,7 +514,7 @@ def plot_cgm_reward_action_with_legend(cgm_sequence, hour_series, reward_list, a
     ax1.add_artist(cgm_legend)
 
     action_patches = [mpatches.Patch(color='green', label='Nothing'), mpatches.Patch(color='blue', label='Eat (g)'),
-        mpatches.Patch(color='red', label='Inject (U)'), mpatches.Patch(color='m', label='Meal (g)')]
+                      mpatches.Patch(color='red', label='Inject (U)'), mpatches.Patch(color='m', label='Meal (g)')]
 
     ax1.legend(handles=action_patches, loc='upper left', fontsize=12)
 
@@ -485,8 +582,7 @@ def plot_eat_action_distribution(test_actions, test_time_window, save_path):
 
     # Plot 2: Average carb amount with std dev
     plt.figure(figsize=(10, 5))
-    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='dodgerblue', alpha=0.9,
-            error_kw=dict(ecolor='red', linewidth=1.5))
+    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='dodgerblue', alpha=0.9, error_kw=dict(ecolor='red', linewidth=1.5))
     plt.xlabel("Hour of Day")
     plt.ylabel("Average Carb Amount (g)")
     plt.title(f"Average Carb Intake by Hour Across {num_tests} Tests")
@@ -531,8 +627,7 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
 
     # Plot 2: Average insulin amount with std dev
     plt.figure(figsize=(10, 5))
-    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='mediumseagreen', alpha=0.9,
-            error_kw=dict(ecolor='black', linewidth=1.5))
+    plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='mediumseagreen', alpha=0.9, error_kw=dict(ecolor='black', linewidth=1.5))
     plt.xlabel("Hour of Day")
     plt.ylabel("Average Bolus Insulin Amount (units)")
     plt.title(f"Average Bolus Insulin Injection by Hour Across {num_tests} Tests")
@@ -541,3 +636,118 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_amount.png', dpi=300)
     plt.show()
+
+
+def plot_behavior_radar(patient, agent, save_path):
+    labels = list(patient.keys())
+    num_vars = len(labels)
+
+    max_vals_dict = {}
+    for feat in labels:
+        max_val = max(patient.get(feat, 0), agent.get(feat, 0))
+        max_vals_dict[feat] = max_val * 1.1
+        if max_vals_dict[feat] == 0:
+            max_vals_dict[feat] = 1.0
+
+    patient_vals_norm = [patient[feat] / max_vals_dict[feat] for feat in labels]
+    agent_vals_norm = [agent[feat] / max_vals_dict[feat] for feat in labels]
+
+    patient_vals_norm += patient_vals_norm[:1]
+    agent_vals_norm += agent_vals_norm[:1]
+
+    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
+
+    # --- Custom Styling ---
+    ax.set_title(f'Average Daily Behavioral Feature Comparison', fontsize=16, pad=20)
+    ax.title.set_y(1.1)
+    ax.tick_params(axis='y', labelsize=10)
+    ax.tick_params(axis='x', labelsize=10, pad=25)
+    ax.xaxis.grid(True, color='#AAAAAA')
+    ax.yaxis.grid(True, color='#AAAAAA')
+
+    # Plot the normalized data
+    ax.plot(angles, patient_vals_norm, label='Patient', color='#FF69B4', linewidth=2)
+    ax.fill(angles, patient_vals_norm, color='#FF69B4', alpha=0.3)
+
+    ax.plot(angles, agent_vals_norm, label='RL Agent', color='deepskyblue', linewidth=2)
+    ax.fill(angles, agent_vals_norm, color='deepskyblue', alpha=0.3)
+
+    r_grids_norm = [0.2, 0.4, 0.6, 0.8, 1.0]
+    ax.set_ylim(0, 1.0)
+    ax.set_yticks(r_grids_norm)
+    ax.set_yticklabels([])
+
+    for i in range(num_vars):
+        feat = labels[i]
+        angle = angles[i]
+
+        max_val_real = max_vals_dict[feat] * 1.0
+
+        if 0.0 < angle < np.pi:
+            text_offset = 0.03
+            alignment = 'left'
+        elif angle > np.pi:
+            text_offset = -0.03
+            alignment = 'right'
+        else:
+            text_offset = 0.0
+            alignment = 'center'
+
+        for r_norm in r_grids_norm:
+            r_real = max_val_real * r_norm
+
+            if r_real >= 10:
+                format_str = f'{r_real:.0f}'
+            elif r_real > 0.1:
+                format_str = f'{r_real:.1f}'
+            else:
+                format_str = f'{r_real:.2f}'
+
+            ax.text(angle + text_offset, r_norm, format_str, ha=alignment, va='center', fontsize=10, color='dimgray', clip_on=False)
+
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels)
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.25), fontsize=12, ncol=2)
+
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/behavioral_comparison_radar.png', dpi=300)
+    plt.show()
+
+
+def plot_behavior_bar(real_features, agent_features, save_path):
+    labels = list(real_features.keys())
+    real_vals = list(real_features.values())
+    agent_vals = list(agent_features.values())
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(x - width / 2, real_vals, width, label='Patient', color='skyblue')
+    ax.bar(x + width / 2, agent_vals, width, label='RL Agent', color='salmon')
+
+    ax.set_ylabel('Value')
+    ax.set_title('Behavioral Feature Comparison')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha='right')
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/behavioral_comparison_bar.png', dpi=300)
+    plt.close()
+
+
+if __name__ == '__main__':
+    patient_features = {"Number of Injections": 4.2, "Total Bolus Units": 28.5, "Number of Meals": 3.8, "Total Carb (gram)": 195.0,
+                        "Bolus to Carb Ratio": 0.15, "Meal Gap (min)": 280.0, "Bolus Gap (min)": 220.0}
+
+    agent_features = {"Number of Injections": 3.0, "Total Bolus Units": 24.0, "Number of Meals": 4.0, "Total Carb (gram)": 160.0,
+                      "Bolus to Carb Ratio": 0.18, "Meal Gap (min)": 240.0, "Bolus Gap (min)": 180.0}
+
+    plot_behavior_radar(patient_features, agent_features, save_path="test_output")

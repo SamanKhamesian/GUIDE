@@ -87,7 +87,7 @@ class Preprocessor:
         df_train["time_since_last_insulin"] = self.__compute_time_since_last_event(df_train[bolus_col].values)
         df_test["time_since_last_insulin"] = self.__compute_time_since_last_event(df_test[bolus_col].values)
 
-        relevant_features = ['hour', 'sleep', 'time_since_last_meal', 'time_since_last_insulin', carb_col, bolus_col, basal_col, glucose_col]
+        relevant_features = ['timestamp', 'hour', 'sleep', 'time_since_last_meal', 'time_since_last_insulin', carb_col, bolus_col, basal_col, glucose_col]
 
         # moving average
         moving_avg_200 = self.__calculate_moving_average(df_train[glucose_col].values, PredictorConfig.MA_WINDOW_SIZE)
@@ -163,10 +163,11 @@ class DataController:
 
         self.__preprocessor = Preprocessor()
 
-        X_train, y_train, X_test, y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
-        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, y_train)
-
-        self.X_rl_train, self.X_rl_test, self._y_rl_train_, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, y_test)
+        self.X_history, self.y_history, self.X_test, self.y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
+        X_train = self.X_history[:, 1:]
+        X_test = self.X_test[:, 1:]
+        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, self.y_history)
+        self.X_rl_train, self.X_rl_test, self._y_rl_train_, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, self.y_test)
 
         self.X = self.X_rl_train[0][None, :, :]
 
