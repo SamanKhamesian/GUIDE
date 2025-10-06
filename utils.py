@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import torch
-from scipy.stats import pearsonr
 
 from config import Action, Threshold
 
@@ -59,6 +58,16 @@ def cal_time_above_range(cgm_array):
     cgm_array = np.array(cgm_array)
     count = (cgm_array > Threshold.HYPERGLYCEMIA).sum()
     return (count / len(cgm_array)) * 100
+
+
+def cal_coefficient_of_variation(cgm_array):
+    cgm_array = np.array(cgm_array)
+
+    mean_cgm = np.mean(cgm_array)
+    std_cgm = np.std(cgm_array)
+
+    cv_percent = (std_cgm / mean_cgm) * 100
+    return cv_percent
 
 
 def extract_behavior_features_from_actions(actions, main_meal_actions):
@@ -183,228 +192,13 @@ def count_glycemic_events(data, threshold, mode='hyper'):
     return count
 
 
-def evaluate_action_success(test_cgms, test_actions, threshold, direction, target_action_type):
-    """
-    Parameters:
-        - threshold: value to compare CGM against
-        - direction: '>' for hyper, '<' for hypo
-        - target_action_type: Action.EAT or Action.INJECT
-    """
-    tp = fp = fn = tn = 0
-
-    for cgm_seq, actions in zip(test_cgms, test_actions):
-        cgm_seq = np.asarray(cgm_seq, dtype=float)
-        n_hours = len(actions)
-        if n_hours == 0:
-            continue
-
-        slots_per_hour = len(cgm_seq) // n_hours
-        usable_len = n_hours * slots_per_hour
-        hourly_means = cgm_seq[:usable_len].reshape(n_hours, slots_per_hour).mean(axis=1)
-        action_types = np.array([t for (t, _, _) in actions], dtype=int)
-
-        for mean_cgm, act_type in zip(hourly_means, action_types):
-            is_event = (mean_cgm > threshold) if direction == '>' else (mean_cgm < threshold)
-            is_action = act_type == target_action_type
-
-            if is_event and is_action:
-                tp += 1
-            elif is_event and not is_action:
-                fn += 1
-            elif not is_event and is_action:
-                fp += 1
-            else:
-                tn += 1
-
-    # Use np.nan instead of 0.0 to indicate undefined precision/recall
-    precision = tp / (tp + fp) if (tp + fp) > 0 else np.nan
-    recall = tp / (tp + fn) if (tp + fn) > 0 else np.nan
-
-    return {"TP": tp, "FP": fp, "FN": fn, "TN": tn, "Precision": precision, "Recall": recall}
-
-
-def print_and_save_action_eval(title, result_dict, log_path):
-    """
-    Parameters:
-        title: str → Section title like "Injection on Hyperglycemia"
-        result_dict: dict → Output from evaluate_action_success()
-        log_path: str → Path to the log file
-    """
-    tp = result_dict["TP"]
-    fp = result_dict["FP"]
-    fn = result_dict["FN"]
-    tn = result_dict["TN"]
-    precision = result_dict["Precision"]
-    recall = result_dict["Recall"]
-
-    total = tp + fp + fn + tn
-    pct = lambda x: (x / total) * 100 if total > 0 else np.nan
-    fmt = lambda x: f"{x:.2f}" if not np.isnan(x) else "NaN"
-
-    # Console output
-    print(f"\n------------------ {title} ------------------")
-    print(f"True Positives : {tp} ({fmt(pct(tp))}%)")
-    print(f"False Positives: {fp} ({fmt(pct(fp))}%)")
-    print(f"False Negatives: {fn} ({fmt(pct(fn))}%)")
-    print(f"True Negatives : {tn} ({fmt(pct(tn))}%)")
-    print(f"Precision      : {fmt(precision)}")
-    print(f"Recall         : {fmt(recall)}")
-
-    # File output
-    with open(log_path, "a") as f:
-        f.write(f"\n------------------ {title} ------------------\n")
-        f.write(f"True Positives : {tp} ({fmt(pct(tp))}%)\n")
-        f.write(f"False Positives: {fp} ({fmt(pct(fp))}%)\n")
-        f.write(f"False Negatives: {fn} ({fmt(pct(fn))}%)\n")
-        f.write(f"True Negatives : {tn} ({fmt(pct(tn))}%)\n")
-        f.write(f"Precision      : {fmt(precision)}\n")
-        f.write(f"Recall         : {fmt(recall)}\n")
-
-
-def __safe_corr(x, y):
-    if len(x) != len(y) or len(x) == 0:
-        return 0.0
-
-    r, _ = pearsonr(x, y)
-
-    if np.isnan(r):
-        return 0.0
-    return r
-
-
-def compute_event_corr(test_cgms, test_actions):
-    """
-    Returns a 2x2 matrix with rows [InsulinDesired(>185), MealDesired(<110)],
-    cols [Eat, Inject], computed across ALL tests for this patient.
-    Uses HOURLY mean CGM values aligned to hourly actions (no expansion).
-    """
-    hourly_means_all = []
-    hourly_action_types_all = []
-
-    for cgm_seq, actions in zip(test_cgms, test_actions):
-        cgm_seq = np.asarray(cgm_seq, dtype=float)
-        n_hours = len(actions)
-        if n_hours == 0:
-            continue
-
-        slots_per_hour = len(cgm_seq) // n_hours
-        if slots_per_hour <= 0:
-            continue
-
-        usable_len = n_hours * slots_per_hour
-        hourly_means = cgm_seq[:usable_len].reshape(n_hours, slots_per_hour).mean(axis=1)
-
-        action_types = np.array([t for (t, _, _) in actions], dtype=int)
-
-        m = min(len(hourly_means), len(action_types))
-        hourly_means_all.append(hourly_means[:m])
-        hourly_action_types_all.append(action_types[:m])
-
-    if not hourly_means_all:
-        return np.zeros((2, 2), dtype=float)
-
-    mean_cgm_hourly = np.concatenate(hourly_means_all)
-    action_types_hourly = np.concatenate(hourly_action_types_all)
-
-    # Event masks from reward logic
-    insulin_desired = (mean_cgm_hourly > 165).astype(int)
-    meal_desired = (mean_cgm_hourly < 120).astype(int)
-
-    # Action masks
-    eat_actions = (action_types_hourly == Action.EAT).astype(int)
-    inject_actions = (action_types_hourly == Action.INJECT).astype(int)
-
-    # Correlations
-    corr_insulin_eat = __safe_corr(insulin_desired, eat_actions)
-    corr_insulin_inject = __safe_corr(insulin_desired, inject_actions)
-    corr_meal_eat = __safe_corr(meal_desired, eat_actions)
-    corr_meal_inject = __safe_corr(meal_desired, inject_actions)
-
-    mat = np.array([[corr_insulin_eat, corr_insulin_inject], [corr_meal_eat, corr_meal_inject], ], dtype=float)
-
-    return np.nan_to_num(mat, nan=0.0)
-
-
-def plot_event_corr(corr_matrix, save_path):
-    """
-    Plots a single 2x2 heatmap (rows: Hyper/Hypo, cols: Eat/Inject).
-    If any entry was undefined originally, we expect it was set to 0 by nan_policy="zero".
-    """
-    rows = ["Hyperglycemia", "Hypoglycemia"]
-    cols = ["Eat", "Inject"]
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(corr_matrix, vmin=-1, vmax=1)
-
-    ax.set_xticks(np.arange(len(cols)));
-    ax.set_xticklabels(cols)
-    ax.set_yticks(np.arange(len(rows)));
-    ax.set_yticklabels(rows)
-
-    for i in range(2):
-        for j in range(2):
-            ax.text(j, i, f"{corr_matrix[i, j]:.2f}", ha="center", va="center", fontsize=10)
-
-    ax.set_title("Correlation (Events × Actions)")
-    fig.colorbar(im, ax=ax, label="Pearson r")
-    plt.tight_layout()
-    fig.savefig(f"{save_path}/event_corr.png", dpi=300)
-    plt.show()
-
-
-def plot_rewards(reward_list, title="Reward per Step", save_path="test.png"):
-    plt.figure(figsize=(12, 6))
-    plt.plot(reward_list, label='Reward')
-    plt.xlabel("Step", fontsize=14)
-    plt.ylabel("Reward", fontsize=14)
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
-    plt.title(title, fontsize=16)
-    plt.grid(True)
-    plt.legend(fontsize=14)
-
-    plt.savefig(save_path, dpi=300)
-    plt.show()
-
-
-def plot_cgm_levels(cgm_sequence, hour_series, title="Predicted CGM Levels", save_path="test.png"):
-    cgm_sequence = np.array(cgm_sequence)
-    plt.figure(figsize=(12, 6))
-    plt.plot(cgm_sequence, label="CGM", color="black")
-
-    hypo_mask = cgm_sequence < Threshold.HYPOGLYCEMIA
-    hyper_mask = cgm_sequence > Threshold.HYPERGLYCEMIA
-    in_range_mask = ~hypo_mask & ~hyper_mask
-
-    plt.plot(np.where(hypo_mask)[0], cgm_sequence[hypo_mask], 'r-', label='Hypoglycemia')
-    plt.plot(np.where(hyper_mask)[0], cgm_sequence[hyper_mask], 'orange', label='Hyperglycemia')
-    plt.plot(np.where(in_range_mask)[0], cgm_sequence[in_range_mask], 'g-', label='In Range')
-
-    plt.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=0.5)
-    plt.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=0.5)
-
-    tick_indices = np.arange(0, len(hour_series), 12 * 6)
-    tick_labels = [str(int(hour_series[i])) for i in tick_indices]
-
-    plt.xticks(tick_indices, tick_labels, rotation=0, fontsize=14)
-    plt.yticks(fontsize=14)
-    plt.xlabel("Time", fontsize=14)
-    plt.ylabel("CGM Value", fontsize=14)
-    plt.title(title, fontsize=16)
-    plt.grid(True)
-    plt.legend(fontsize=14)
-
-    plt.savefig(save_path, dpi=300)
-    plt.show()
-
-
-def plot_cgm_reward_action_with_legend(cgm_sequence,
-                                       hour_series,
-                                       reward_list,
-                                       action_list,
-                                       test_index,
-                                       main_meal_actions=None,
-                                       save_path_prefix=None):
+def plot_cgm_reward_action(cgm_sequence,
+                           hour_series,
+                           reward_list,
+                           action_list,
+                           test_index,
+                           main_meal_actions=None,
+                           save_path_prefix=None):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
     start = 0
     end = 24
@@ -701,12 +495,14 @@ def plot_behavior_radar(patient, agent, save_path):
 
             if r_real >= 10:
                 format_str = f'{r_real:.0f}'
-            elif r_real > 0.1:
+            elif r_real >= 1:
                 format_str = f'{r_real:.1f}'
-            else:
+            elif r_real >= 0.1:
                 format_str = f'{r_real:.2f}'
+            else:
+                format_str = f'{r_real:.3f}'
 
-            ax.text(angle + text_offset, r_norm, format_str, ha=alignment, va='center', fontsize=10, color='dimgray', clip_on=False)
+            ax.text(angle + text_offset, r_norm, format_str, ha=alignment, va='center', fontsize=10, color='dimgray', clip_on=True)
 
     ax.set_thetagrids(np.degrees(angles[:-1]), labels)
     ax.set_theta_offset(np.pi / 2)

@@ -7,7 +7,7 @@ from buffer import PPOBuffer
 from config import Action, Threshold, PPORewardShaping, PPOConfig, DataConfig
 from ppo_model.ppo_agent import PPOAgent
 from simulator import Simulator
-from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_above_range, cal_time_below_range, plot_tir_tbr_tar,
+from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_above_range, cal_time_below_range, plot_tir_tbr_tar,
                    plot_eat_action_distribution, plot_insulin_action_distribution)
 
 
@@ -370,7 +370,7 @@ def test_ppo(env, agent, carb_values, insulin_values, folder_path):
         true_tar.append(_true_tar)
         true_tbr.append(_true_tbr)
 
-        plot_cgm_reward_action_with_legend(
+        plot_cgm_reward_action(
             cgm_sequence=predicted_cgms,
             true_cgm_sequence=None,
             hour_series=time_window,

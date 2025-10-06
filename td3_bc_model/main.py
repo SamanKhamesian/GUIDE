@@ -1,15 +1,16 @@
 import os
+import sys
 
 import numpy as np
 import torch
 
-from config import Action, Threshold, TD3Config, TD3RewardShaping
+from config import Action, Threshold, TD3Config, TD3RewardShaping, DataConfig
 from simulator import Simulator
 from td3_bc_model.replay_buffer import ReplayBuffer
 from td3_bc_model.td3_bc_agent import TD3_BC
-from utils import (plot_cgm_reward_action_with_legend, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution, count_glycemic_events, extract_behavior_features_from_actions,
-                   extract_patient_behavior_features, plot_behavior_radar)
+from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
+                   plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, count_glycemic_events,
+                   extract_behavior_features_from_actions, extract_patient_behavior_features, plot_behavior_radar)
 
 
 class EnvironmentAdvanced:
@@ -320,7 +321,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
         os.remove(log_path)
 
     test_rewards, test_cgms, test_actions, test_time_window, test_behavioral_features = [], [], [], [], []
-    test_tir, test_tar, test_tbr = [], [], []
+    test_tir, test_tar, test_tbr, test_cv = [], [], [], []
 
     y_history = env.simulator.data.y_history
     x_history = env.simulator.data.X_history
@@ -367,40 +368,44 @@ def test_td3_bc(env, agent, max_action, folder_path):
         test_time_window.append(time_window)
 
         print(f"\n-------------- Results for Test {i + 1} ---------------\n")
-        print(f"Episode-end reward: {episode_end_reward:.2f}")
-        print(f"Evaluation reward: {total_reward - episode_end_reward:.2f}")
-        print(f"Total Evaluation reward: {total_reward:.2f}")
+        print(f"Episode-end reward      : {episode_end_reward:.2f}")
+        print(f"Evaluation reward       : {total_reward - episode_end_reward:.2f}")
+        print(f"Total Evaluation reward : {total_reward:.2f}")
 
         tir = cal_time_in_range(predicted_cgms)
         tar = cal_time_above_range(predicted_cgms)
         tbr = cal_time_below_range(predicted_cgms)
+        cv  = cal_coefficient_of_variation(predicted_cgms)
 
         test_tir.append(tir)
         test_tar.append(tar)
         test_tbr.append(tbr)
+        test_cv.append(cv)
 
-        print(f"\nTime-in-Range : {tir:.2f}%")
-        print(f"Time-above-Range: {tar:.2f}%")
-        print(f"Time-below-Range: {tbr:.2f}%")
+        print(f"\nTime-in-Range           : {tir:.2f}%")
+        print(f"Time-above-Range        : {tar:.2f}%")
+        print(f"Time-below-Range        : {tbr:.2f}%")
+        print(f"Coefficient of Variation: {cv:.2f}%")
 
-        plot_cgm_reward_action_with_legend(cgm_sequence=predicted_cgms,
-                                           hour_series=time_window,
-                                           reward_list=rewards,
-                                           action_list=actions,
-                                           test_index=i + 1,
-                                           main_meal_actions=main_meal_actions,
-                                           save_path_prefix=folder_path)
+        plot_cgm_reward_action(cgm_sequence=predicted_cgms,
+                               hour_series=time_window,
+                               reward_list=rewards,
+                               action_list=actions,
+                               test_index=i + 1,
+                               main_meal_actions=main_meal_actions,
+                               save_path_prefix=folder_path)
 
         with open(log_path, "a") as f:
             f.write(f"\n--------------------- Results for Test {i + 1} ----------------------\n")
-            f.write(f"\nEpisode-end reward: {episode_end_reward:.2f}\n")
-            f.write(f"Evaluation reward: {total_reward - episode_end_reward:.2f}\n")
-            f.write(f"Total Evaluation reward: {total_reward:.2f}\n")
-            f.write(f"\nTime-in-Range   : {tir:.2f}%\n")
-            f.write(f"Time-above-Range: {tar:.2f}%\n")
-            f.write(f"Time-below-Range: {tbr:.2f}%\n")
+            f.write(f"\nEpisode-end reward      : {episode_end_reward:.2f}\n")
+            f.write(f"Evaluation reward       : {total_reward - episode_end_reward:.2f}\n")
+            f.write(f"Total Evaluation reward : {total_reward:.2f}\n")
+            f.write(f"\nTime-in-Range           : {tir:.2f}%\n")
+            f.write(f"Time-above-Range        : {tar:.2f}%\n")
+            f.write(f"Time-below-Range        : {tbr:.2f}%\n")
+            f.write(f"Coefficient of Variation: {cv:.2f}%\n")
 
-    evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path)
+    evaluate_performance(test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path)
 
     if test_behavioral_features:
         avg_features = {}
@@ -412,7 +417,7 @@ def test_td3_bc(env, agent, max_action, folder_path):
         plot_behavior_radar(patient_behavioral_features, avg_features, save_path=folder_path)
 
 
-def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, log_path, folder_path):
+def evaluate_performance(test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path):
     print(f"\n----------------- Final Results ------------------")
 
     # TIR
@@ -430,38 +435,46 @@ def evaluate_performance(test_rewards, test_cgms, test_actions, test_time_window
     std_tbr = np.std(test_tbr)
     med_tbr = np.median(test_tbr)
 
+    # CV
+    avg_cv = np.mean(test_cv)
+    std_cv = np.std(test_cv)
+    med_cv = np.median(test_cv)
+
     plot_tir_tbr_tar(test_tir, test_tar, test_tbr, save_path=f'{folder_path}/all_tests.png')
     plot_eat_action_distribution(test_actions, test_time_window, save_path=folder_path)
     plot_insulin_action_distribution(test_actions, test_time_window, save_path=folder_path)
 
-    print(f"\nAverage Time-in-Range (TIR)   : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%")
-    print(f"Average Time-above-Range (TAR): {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%")
-    print(f"Average Time-below-Range (TBR): {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%")
+    print(f"\nAverage Time-in-Range (TIR)          : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%")
+    print(f"Average Time-above-Range (TAR)       : {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%")
+    print(f"Average Time-below-Range (TBR)       : {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%")
+    print(f"Average Coefficient of Variation (CV): {avg_cv:.2f}% (± {std_cv:.2f}%), Median: {med_cv:.2f}%")
 
-    print(f"\nHistory Time-in-Range (TIR)   : {cal_time_in_range(y_history):.2f}%")
-    print(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%")
-    print(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%")
+    print(f"\nHistory Time-in-Range (TIR)          : {cal_time_in_range(y_history):.2f}%")
+    print(f"History Time-above-Range (TAR)       : {cal_time_above_range(y_history):.2f}%")
+    print(f"History Time-below-Range (TBR)       : {cal_time_below_range(y_history):.2f}%")
+    print(f"History Coefficient of Variation (CV): {cal_coefficient_of_variation(y_history):.2f}%")
 
     with open(log_path, "a") as f:
         # Summary statistics block
         f.write("\n----------- Summary Time-in-Range Stats Across Tests -----------\n")
-        f.write(f"Average Time-in-Range (TIR)   : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%\n")
-        f.write(f"Average Time-above-Range (TAR): {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%\n")
-        f.write(f"Average Time-below-Range (TBR): {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%\n")
+        f.write(f"Average Time-in-Range (TIR)          : {avg_tir:.2f}% (± {std_tir:.2f}%), Median: {med_tir:.2f}%\n")
+        f.write(f"Average Time-above-Range (TAR)       : {avg_tar:.2f}% (± {std_tar:.2f}%), Median: {med_tar:.2f}%\n")
+        f.write(f"Average Time-below-Range (TBR)       : {avg_tbr:.2f}% (± {std_tbr:.2f}%), Median: {med_tbr:.2f}%\n")
+        f.write(f"Average Coefficient of Variation (CV): {avg_cv:.2f}% (± {std_cv:.2f}%), Median: {med_cv:.2f}%")
 
         # History block
         f.write("\n---------------- Historical Time-in-Range Stats ----------------\n")
-        f.write(f"History Time-in-Range (TIR)   : {cal_time_in_range(y_history):.2f}%\n")
-        f.write(f"History Time-above-Range (TAR): {cal_time_above_range(y_history):.2f}%\n")
-        f.write(f"History Time-below-Range (TBR): {cal_time_below_range(y_history):.2f}%\n")
+        f.write(f"History Time-in-Range (TIR)          : {cal_time_in_range(y_history):.2f}%\n")
+        f.write(f"History Time-above-Range (TAR)       : {cal_time_above_range(y_history):.2f}%\n")
+        f.write(f"History Time-below-Range (TBR)       : {cal_time_below_range(y_history):.2f}%\n")
+        f.write(f"History Coefficient of Variation (CV): {cal_coefficient_of_variation(y_history):.2f}%")
 
 
 def main(dataset_name, patient_id):
     env = EnvironmentAdvanced(dataset_name=dataset_name, patient_id=patient_id)
     device = torch.device("cpu")
-    folder_path = f'./td3_bc_model/tests/final/behavioral/{dataset_name}_patient_{patient_id}'
+    folder_path = f'./td3_bc_model/tests/final/azt1d_extra/{dataset_name}_patient_{patient_id}'
 
-    min_action = np.array([0.0, 0.0, 0.0, TD3Config.CARB_RANGE[0], TD3Config.INSULIN_RANGE[0], 0.0])
     max_action = np.array([1.0, 1.0, 1.0, TD3Config.CARB_RANGE[1], TD3Config.INSULIN_RANGE[1], 11.0])
 
     agent = TD3_BC(state_dim=TD3Config.STATE_SIZE, action_dim=len(max_action), max_action=max_action, device=device)
@@ -473,8 +486,6 @@ def main(dataset_name, patient_id):
 
 
 if __name__ == "__main__":
+    # patient_id = sys.argv[1]
     set_seed(42)
-    # for i in ["540", "544", "552", "559", "563", "567", "570", "575", "584", "588", "591", "596"]:
-    #     main(dataset_name="ohio", patient_id=str(i))
-    # for i in [2, 4, 5, 6, 7, 13, 15, 18, 22, 25]:
-    main(dataset_name="azt1d", patient_id=str(20))
+    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID))
