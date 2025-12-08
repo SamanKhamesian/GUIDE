@@ -1,6 +1,7 @@
 # Byte-compiled / optimized / DLL files
 dataset/
 tests/
+archive.py
 
 **/.DS_Store
 

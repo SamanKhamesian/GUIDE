@@ -198,7 +198,9 @@ def plot_cgm_reward_action(cgm_sequence,
                            action_list,
                            test_index,
                            main_meal_actions=None,
-                           save_path_prefix=None):
+                           save_path_prefix=None,
+                           show=False):
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
     start = 0
     end = 24
@@ -314,10 +316,12 @@ def plot_cgm_reward_action(cgm_sequence,
 
     plt.tight_layout()
     plt.savefig(f"{save_path_prefix}/test_{test_index}_results.png", dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
 
-def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Range Metrics Across Tests'):
+def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Range Metrics Across Tests', show=False):
     days = np.arange(1, len(tir_list) + 1)
     labels = [f'Test {i}' for i in days]
 
@@ -339,10 +343,12 @@ def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Ran
     plt.legend()
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
 
-def plot_eat_action_distribution(test_actions, test_time_window, save_path):
+def plot_eat_action_distribution(test_actions, test_time_window, save_path, show=False):
     hour_eat_counts = defaultdict(int)
     hour_eat_amounts = defaultdict(list)
     num_tests = len(test_actions)
@@ -372,7 +378,9 @@ def plot_eat_action_distribution(test_actions, test_time_window, save_path):
     plt.grid(axis='y', linestyle='--', alpha=0.9)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_carb_distribution.png', dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
     # Plot 2: Average carb amount with std dev
     plt.figure(figsize=(10, 5))
@@ -384,10 +392,12 @@ def plot_eat_action_distribution(test_actions, test_time_window, save_path):
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_carb_amount.png', dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
 
-def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
+def plot_insulin_action_distribution(test_actions, test_time_window, save_path, show=False):
     hour_inject_counts = defaultdict(int)
     hour_inject_amounts = defaultdict(list)
     num_tests = len(test_actions)
@@ -417,7 +427,9 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
     plt.grid(axis='y', linestyle='--', alpha=0.9)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_distribution.png', dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
     # Plot 2: Average insulin amount with std dev
     plt.figure(figsize=(10, 5))
@@ -429,10 +441,12 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path):
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_amount.png', dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
 
-def plot_behavior_radar(patient, agent, save_path):
+def plot_behavior_radar(patient, agent, save_path, show=False):
     labels = list(patient.keys())
     num_vars = len(labels)
 
@@ -512,10 +526,12 @@ def plot_behavior_radar(patient, agent, save_path):
 
     plt.tight_layout()
     plt.savefig(f'{save_path}/behavioral_comparison_radar.png', dpi=300)
-    plt.show()
+
+    if show:
+        plt.show()
 
 
-def plot_behavior_bar(real_features, agent_features, save_path):
+def plot_behavior_bar(real_features, agent_features, save_path, show=False):
     labels = list(real_features.keys())
     real_vals = list(real_features.values())
     agent_vals = list(agent_features.values())
@@ -536,7 +552,9 @@ def plot_behavior_bar(real_features, agent_features, save_path):
 
     plt.tight_layout()
     plt.savefig(f'{save_path}/behavioral_comparison_bar.png', dpi=300)
-    plt.close()
+
+    if show:
+        plt.show()
 
 
 if __name__ == '__main__':
