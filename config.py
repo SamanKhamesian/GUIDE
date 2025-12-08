@@ -23,6 +23,19 @@ class PredictorConfig:
     WEIGHTS = [1, 3.296363582, 2.382397706]
 
 
+class EnvConfig:
+    STATE_DIM = 6 * 12 * 7
+
+
+class RewardShaping:
+    IDEAL_CGM = 125
+    WEIGHTS = [100, 7.0, 2.0]
+
+    HYPO_HYPER_1_PENALTY = 100
+    HYPO_HYPER_2_PENALTY = 200
+    HYPO_HYPER_3_PENALTY = 300
+
+
 # TD3_BC Model Configuration
 class TD3Config:
     MAX_EPISODES = 20
@@ -42,29 +55,18 @@ class TD3Config:
     ACTOR_LEARNING_RATE = 3e-4
     CRITIC_LEARNING_RATE = 1e-4
 
-    STATE_SIZE = 6 * 12 * 7 # 8 features, and 6-hour data for each
     CARB_RANGE = (5, 50)
     INSULIN_RANGE = (2, 15)
 
 
-# Reward Function Shaping for TD3-BC Model
-class TD3RewardShaping:
-    IDEAL_CGM = 125
-    WEIGHTS = [100, 7.0, 2.0]
-
-    HYPO_HYPER_1_PENALTY = 100
-    HYPO_HYPER_2_PENALTY = 200
-    HYPO_HYPER_3_PENALTY = 300
-
-
 # Reward Function Shaping for PPO Model
 class PPOConfig:
+    MAX_EPOCHS = 20
     MAX_STEPS_PER_EPISODE = 24
-    TRAINING_EPOCHS = 5
     TESTING_STEPS = 24
     BATCH_SIZE = 256
     HIDDEN_SIZE = 256
-    NUM_TRAIN_INIT_STATE = 50
+    NUM_TRAIN_INIT_STATE = 100
     NUM_TEST_INIT_STATE = 10
 
     GAMMA = 0.99
@@ -74,33 +76,13 @@ class PPOConfig:
     ENTROPY_COEF = 0.001
     LEARNING_RATE = 3e-4
 
-    STATE_SIZE = 6 * 12 * 8
-    CARB_RANGE = [5, 100]
+    CARB_RANGE = [5, 50]
     CARB_STEP = 1
-    INSULIN_RANGE = [0.1, 10.0]
+    INSULIN_RANGE = [2.0, 15.0]
     INSULIN_STEP = 0.1
     TIME_INDEX_RANGE = [0, 11]
     TIME_STEP = 1
     N_ACTION_TYPE = 3
-
-
-# Reward Function Shaping for PPO Model
-class PPORewardShaping:
-    IDEAL_CGM = 125
-    WEIGHTS = [100, 11.0, 1.09018]
-
-    DO_NOTHING_IN_SLEEP = 50
-    DO_NOTHING_BONUS = 20
-    REPEATED_ACTION_PENALTY = 30
-    EAT_COUNT_REWARD = 60
-
-    EARLY_MEAL_PENALTY = 40
-    EARLY_INJECTION_PENALTY = 40
-    GOOD_MEAL_TIMING_BONUS = 60
-
-    HYPO_HYPER_1_PENALTY = 50
-    HYPO_HYPER_2_PENALTY = 100
-    HYPO_HYPER_3_PENALTY = 200
 
 
 # Action Categories

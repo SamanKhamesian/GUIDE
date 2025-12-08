@@ -1,56 +1,95 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Normal
+
 from config import PPOConfig
 
 
 class PPOActor(nn.Module):
-    def __init__(self, state_dim, n_action_type, n_carb, n_insulin, n_time):
+    def __init__(self, state_dim, n_action_type=3):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, PPOConfig.HIDDEN_SIZE)
         self.fc2 = nn.Linear(PPOConfig.HIDDEN_SIZE, PPOConfig.HIDDEN_SIZE)
 
+        # Output means and log_stds for carb, insulin, time
+        self.mean_carb = nn.Linear(PPOConfig.HIDDEN_SIZE, 1)
+        self.mean_insulin = nn.Linear(PPOConfig.HIDDEN_SIZE, 1)
+        self.mean_time = nn.Linear(PPOConfig.HIDDEN_SIZE, 1)
+
+        self.log_std_carb = nn.Parameter(torch.zeros(1))
+        self.log_std_insulin = nn.Parameter(torch.zeros(1))
+        self.log_std_time = nn.Parameter(torch.zeros(1))
+
+        # Still use categorical for action_type (EAT/INJECT/NOTHING)
         self.logits_type = nn.Linear(PPOConfig.HIDDEN_SIZE, n_action_type)
-        self.logits_carb = nn.Linear(PPOConfig.HIDDEN_SIZE, n_carb)
-        self.logits_insulin = nn.Linear(PPOConfig.HIDDEN_SIZE, n_insulin)
-        self.logits_time = nn.Linear(PPOConfig.HIDDEN_SIZE, n_time)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        return self.logits_type(x), self.logits_carb(x), self.logits_insulin(x), self.logits_time(x)
+        mean_carb = self.mean_carb(x)
+        mean_insulin = self.mean_insulin(x)
+        mean_time = self.mean_time(x)
+        logits_type = self.logits_type(x)
+        return mean_carb, mean_insulin, mean_time, logits_type
 
     def get_action(self, state):
-        logits_type, logits_carb, logits_insulin, logits_time = self.forward(state)
+        mean_carb, mean_insulin, mean_time, logits_type = self.forward(state)
 
-        dist_type = Categorical(logits=logits_type)
-        dist_carb = Categorical(logits=logits_carb)
-        dist_insulin = Categorical(logits=logits_insulin)
-        dist_time = Categorical(logits=logits_time)
+        std_carb = self.log_std_carb.exp().clamp(min=1e-3, max=1e2)
+        std_insulin = self.log_std_insulin.exp().clamp(min=1e-3, max=1e2)
+        std_time = self.log_std_time.exp().clamp(min=1e-3, max=1e2)
 
-        action_type = dist_type.sample()
-        carb = dist_carb.sample()
-        insulin = dist_insulin.sample()
-        time = dist_time.sample()
+        mean_carb = mean_carb.clamp(PPOConfig.CARB_RANGE[0], PPOConfig.CARB_RANGE[1])
+        mean_insulin = mean_insulin.clamp(PPOConfig.INSULIN_RANGE[0], PPOConfig.INSULIN_RANGE[1])
+        mean_time = mean_time.clamp(PPOConfig.TIME_INDEX_RANGE[0], PPOConfig.TIME_INDEX_RANGE[1])
 
-        log_probs = dist_type.log_prob(action_type) + dist_carb.log_prob(carb) + \
-                    dist_insulin.log_prob(insulin) + dist_time.log_prob(time)
+        dist_carb = Normal(mean_carb, std_carb)
+        dist_insulin = Normal(mean_insulin, std_insulin)
+        dist_time = Normal(mean_time, std_time)
+        dist_type = torch.distributions.Categorical(logits=logits_type)
 
-        return action_type.item(), carb.item(), insulin.item(), time.item(), log_probs
+        # Sample actions
+        carb = dist_carb.sample().squeeze()
+        insulin = dist_insulin.sample().squeeze()
+        time = dist_time.sample().squeeze()
+        action_type = dist_type.sample().item()
+
+        # Torch clamp to config bounds
+        carb = torch.clamp(carb, PPOConfig.CARB_RANGE[0], PPOConfig.CARB_RANGE[1]).item()
+        insulin = torch.clamp(insulin, PPOConfig.INSULIN_RANGE[0], PPOConfig.INSULIN_RANGE[1]).item()
+        time = int(torch.clamp(time, PPOConfig.TIME_INDEX_RANGE[0], PPOConfig.TIME_INDEX_RANGE[1]).item())
+
+        # Log probability: always use the tensor values (not Python floats)
+        carb_tensor = torch.tensor(carb).to(mean_carb.device)
+        insulin_tensor = torch.tensor(insulin).to(mean_insulin.device)
+        time_tensor = torch.tensor(time).to(mean_time.device)
+        action_type_tensor = torch.tensor(action_type).to(logits_type.device)
+
+        log_prob = (dist_carb.log_prob(carb_tensor) +
+                    dist_insulin.log_prob(insulin_tensor) +
+                    dist_time.log_prob(time_tensor) +
+                    dist_type.log_prob(action_type_tensor))
+
+        return action_type, carb, insulin, time, log_prob
 
     def get_log_prob(self, state, actions):
-        logits_type, logits_carb, logits_insulin, logits_time = self.forward(state)
+        # actions: [action_type, carb, insulin, time]
+        mean_carb, mean_insulin, mean_time, logits_type = self.forward(state)
+        std_carb = self.log_std_carb.exp()
+        std_insulin = self.log_std_insulin.exp()
+        std_time = self.log_std_time.exp()
 
-        dist_type = Categorical(logits=logits_type)
-        dist_carb = Categorical(logits=logits_carb)
-        dist_insulin = Categorical(logits=logits_insulin)
-        dist_time = Categorical(logits=logits_time)
+        dist_carb = Normal(mean_carb, std_carb)
+        dist_insulin = Normal(mean_insulin, std_insulin)
+        dist_time = Normal(mean_time, std_time)
+        dist_type = torch.distributions.Categorical(logits=logits_type)
 
         a_type, a_carb, a_insulin, a_time = actions.T
 
-        log_prob = dist_type.log_prob(a_type) + dist_carb.log_prob(a_carb) + \
-                   dist_insulin.log_prob(a_insulin) + dist_time.log_prob(a_time)
+        log_prob = (
+                dist_type.log_prob(a_type) + dist_carb.log_prob(a_carb.unsqueeze(-1)) + dist_insulin.log_prob(a_insulin.unsqueeze(-1)) + dist_time.log_prob(
+            a_time.unsqueeze(-1)))
         return log_prob
 
 
@@ -68,15 +107,12 @@ class PPOCritic(nn.Module):
 
 
 class PPOAgent:
-    def __init__(self, state_dim, device, n_carb=50, n_insulin=30, n_time=12):
+    def __init__(self, state_dim, device):
         self.device = device
-        self.actor = PPOActor(state_dim, 3, n_carb, n_insulin, n_time).to(device)
+        self.actor = PPOActor(state_dim, 3).to(device)
         self.critic = PPOCritic(state_dim).to(device)
 
-        self.optimizer = torch.optim.Adam(
-            list(self.actor.parameters()) + list(self.critic.parameters()),
-            lr=PPOConfig.LEARNING_RATE
-        )
+        self.optimizer = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=PPOConfig.LEARNING_RATE)
         self.clip_ratio = PPOConfig.CLIP_RATIO
         self.entropy_coef = PPOConfig.ENTROPY_COEF
         self.value_coef = PPOConfig.VALUE_COEF
@@ -92,18 +128,18 @@ class PPOAgent:
             state = torch.FloatTensor(state).to(self.device)
             return self.critic(state).item()
 
-    def train(self, buffer, batch_size=PPOConfig.BATCH_SIZE, epochs=PPOConfig.TRAINING_EPOCHS):
+    def train(self, buffer, batch_size=PPOConfig.BATCH_SIZE, epochs=PPOConfig.MAX_EPOCHS):
         self.total_it += 1
         states, actions, rewards, old_log_probs, returns, advantages = buffer.get()
 
         for _ in range(epochs):
             for idx in range(0, len(states), batch_size):
-                s_batch = states[idx:idx+batch_size]
-                a_batch = actions[idx:idx+batch_size]
-                r_batch = rewards[idx:idx+batch_size]
-                logp_old_batch = old_log_probs[idx:idx+batch_size]
-                return_batch = returns[idx:idx+batch_size]
-                adv_batch = advantages[idx:idx+batch_size]
+                s_batch = states[idx:idx + batch_size]
+                a_batch = actions[idx:idx + batch_size]
+                r_batch = rewards[idx:idx + batch_size]
+                logp_old_batch = old_log_probs[idx:idx + batch_size]
+                return_batch = returns[idx:idx + batch_size]
+                adv_batch = advantages[idx:idx + batch_size]
 
                 logp = self.actor.get_log_prob(s_batch, a_batch)
                 ratio = torch.exp(logp - logp_old_batch)
@@ -124,4 +160,3 @@ class PPOAgent:
         # Print every 10 training calls, like TD3
         if self.total_it % 10 == 0:
             print(f"[PPO] Step: {self.total_it} | Actor Loss: {actor_loss.item():.4f} | Critic Loss: {critic_loss.item():.4f}")
-
