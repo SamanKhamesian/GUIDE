@@ -26,6 +26,9 @@ class PredictorConfig:
 class EnvConfig:
     STATE_DIM = 6 * 12 * 7
 
+    CARB_RANGE = (5, 50)
+    INSULIN_RANGE = (2, 15)
+
 
 class RewardShaping:
     IDEAL_CGM = 125
@@ -77,12 +80,8 @@ class PPOConfig:
     LEARNING_RATE = 3e-4
 
     CARB_RANGE = [5, 50]
-    CARB_STEP = 1
     INSULIN_RANGE = [2.0, 15.0]
-    INSULIN_STEP = 0.1
     TIME_INDEX_RANGE = [0, 11]
-    TIME_STEP = 1
-    N_ACTION_TYPE = 3
 
 
 # Action Categories
