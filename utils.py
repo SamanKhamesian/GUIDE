@@ -1,4 +1,5 @@
 import os
+import pickle
 import random
 import re
 from collections import defaultdict
@@ -450,6 +451,9 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
     labels = list(patient.keys())
     num_vars = len(labels)
 
+    df = pd.DataFrame({"feature": labels, "patient": [patient[feat] for feat in labels], "agent": [agent[feat] for feat in labels], })
+    df.to_csv(f"{save_path}/behavioral_features.csv", index=False)
+
     max_vals_dict = {}
     for feat in labels:
         max_val = max(patient.get(feat, 0), agent.get(feat, 0))
@@ -555,6 +559,50 @@ def plot_behavior_bar(real_features, agent_features, save_path, show=False):
 
     if show:
         plt.show()
+
+
+def plot_learning_curve(base_path, seeds, title=None):
+    all_returns = []
+    steps = None
+
+    for seed in seeds:
+        path = os.path.join(base_path, f"seed_{seed}", "learning_curve.pkl")
+        with open(path, "rb") as f:
+            curve = pickle.load(f)
+
+        seed_steps = [x[0] for x in curve]
+        seed_returns = [x[1] for x in curve]
+
+        if steps is None:
+            steps = seed_steps
+        else:
+            assert steps == seed_steps, "Mismatch in evaluation steps across seeds"
+
+        all_returns.append(seed_returns)
+
+    all_returns = np.array(all_returns)
+
+    mean_returns = all_returns.mean(axis=0)
+    std_returns = all_returns.std(axis=0)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(steps, mean_returns, label="Mean Return")
+    plt.fill_between(
+        steps,
+        mean_returns - std_returns,
+        mean_returns + std_returns,
+        alpha=0.3,
+        label="±1 STD"
+    )
+
+    plt.xlabel("Training steps")
+    plt.ylabel("Average Evaluation Return (Total Reward per Episode)")
+    if title is not None:
+        plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == '__main__':

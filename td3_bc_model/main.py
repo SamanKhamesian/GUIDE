@@ -1,5 +1,6 @@
 import os
-
+import pickle
+import sys
 import numpy as np
 import torch
 
@@ -49,16 +50,57 @@ def fill_replay_buffer(env, buffer):
     print("Replay buffer filled with episode-end rewards considered.")
 
 
-def train_td3_bc(agent, buffer):
+def train_td3_bc(env, agent, buffer, max_action, folder_path):
     print("Starting TD3-BC training...")
+    eval_return = []
+
     for step in range(TD3Config.TRAINING_STEPS):
         agent.train(buffer, batch_size=TD3Config.BATCH_SIZE)
+
+        if step % 200 == 0:
+            print(f"[Train] step {step}/{TD3Config.TRAINING_STEPS}")
+            avg_return = evaluate_agent(env, agent, max_action)
+            eval_return.append((step, avg_return))
+
+    save_path = os.path.join(folder_path, "learning_curve.pkl")
+
+    with open(save_path, "wb") as f:
+        pickle.dump(eval_return, f)
+
+    print(f"\nTraining is finished and learning curve saved!")
+
+
+def evaluate_agent(env, agent, max_action):
+    returns = []
+
+    for i in range(TD3Config.NUM_TEST_INIT_STATE):
+        state = env.reset(state_index=i, is_testing=True)
+        total_reward = 0
+
+        for step in range(TD3Config.TESTING_STEPS):
+            raw_action = agent.select_action(state)
+            raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
+
+            probs = raw_action[:3]
+            mapped_type = int(np.argmax(probs))
+            carb_amt = raw_action[3]
+            insulin_amt = raw_action[4]
+
+            mapped_time = int(np.clip(np.round(raw_action[5]), 0, 11))
+            mapped_value = carb_amt if mapped_type == 1 else insulin_amt if mapped_type == 2 else 0.0
+
+            action = (mapped_type, mapped_value, mapped_time)
+            state, _, _, reward, _, _ = env.step(step, action)
+            total_reward += reward
+
+        total_reward += env.compute_episode_reward()
+        returns.append(total_reward)
+
+    return np.mean(returns)
 
 
 def test_td3_bc(env, agent, max_action, folder_path):
     print("Evaluating policy...")
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
 
     log_path = os.path.join(folder_path, "eval_results.txt")
     if os.path.isfile(log_path):
@@ -214,22 +256,28 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
         f.write(f"History Coefficient of Variation (CV): {cal_coefficient_of_variation(y_history):.2f}%")
 
 
-def main(dataset_name, patient_id):
-    env = Environment(dataset_name=dataset_name, patient_id=patient_id)
+def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./td3_bc_model/tests/final/azt1d_extra/{dataset_name}_patient_{patient_id}'
+    folder_path = f'./td3_bc_model/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    env = Environment(dataset_name=dataset_name, patient_id=patient_id)
+    env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
 
     max_action = np.array([1.0, 1.0, 1.0, TD3Config.CARB_RANGE[1], TD3Config.INSULIN_RANGE[1], 11.0])
-
     agent = TD3_BC(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
     buffer = ReplayBuffer()
 
     fill_replay_buffer(env, buffer)
-    train_td3_bc(agent, buffer)
+    train_td3_bc(env_eval, agent, buffer, max_action, folder_path)
     test_td3_bc(env, agent, max_action, folder_path)
 
 
 if __name__ == "__main__":
-    # patient_id = sys.argv[1]
-    set_seed(42)
-    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID))
+    patient_id = int(sys.argv[1])
+    seed = int(sys.argv[2])
+    set_seed(seed)
+    main(dataset_name=DataConfig.DATASET, patient_id=str(patient_id), seed=seed)
+
