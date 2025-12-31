@@ -84,6 +84,21 @@ class PPOConfig:
     TIME_INDEX_RANGE = [0, 11]
 
 
+# CQL Model Configuration
+class CQLConfig:
+    BATCH_SIZE = 256
+    TRAINING_STEPS = 10_000
+
+    GAMMA = 0.98
+    TAU = 0.005
+
+    ACTOR_LR = 3e-4
+    CRITIC_LR = 3e-4
+
+    CQL_ALPHA = 5.0
+    NUM_RANDOM_ACTIONS = 10
+    POLICY_FREQ = 1
+
 # Action Categories
 class Action:
     NOTHING = 0

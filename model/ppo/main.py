@@ -1,23 +1,120 @@
+import gc
 import os
+import pickle
+import sys
 
 import numpy as np
+import torch
 
-from config import DataConfig
-from config import TD3Config
+from config import Action, PPOConfig, DataConfig, EnvConfig
 from environment import Environment
-from random_model.random_agent import RandomAgent
-from utils import (cal_time_in_range, cal_time_above_range, cal_time_below_range, cal_coefficient_of_variation,
-                   extract_behavior_features_from_actions, extract_patient_behavior_features, plot_cgm_reward_action, set_seed, plot_tir_tbr_tar,
-                   plot_eat_action_distribution, plot_insulin_action_distribution)
+from model.ppo.buffer import PPOBuffer
+from model.ppo.ppo_agent import PPOAgent
+from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_above_range, cal_time_below_range, plot_tir_tbr_tar,
+                   plot_eat_action_distribution, plot_insulin_action_distribution, extract_patient_behavior_features,
+                   extract_behavior_features_from_actions, cal_coefficient_of_variation, plot_behavior_radar)
 
 
-def test_random_agent(env, folder_path):
-    print("Evaluating Random Agent...")
+def train_ppo(env, env_eval, agent, buffer, folder_path):
+    print("Starting PPO training...")
+    eval_returns = []
 
+    for epoch in range(PPOConfig.MAX_EPOCHS):
+        for i in range(PPOConfig.NUM_TRAIN_INIT_STATE):
+            state = env.reset(state_index=i, is_testing=False)
+            print("\n-------------------- Epoch {}, Step {} --------------------".format(epoch + 1, i + 1))
+            start_idx = len(buffer.rewards)
+
+            for step in range(PPOConfig.MAX_STEPS_PER_EPISODE):
+
+                with torch.no_grad():
+                    action_type, carb_amount, insulin_amount, time_index, log_prob = agent.select_action(state)
+                    value_estimate = agent.evaluate(state)
+
+                if action_type == Action.EAT:
+                    value = carb_amount
+                elif action_type == Action.INJECT:
+                    value = insulin_amount
+                else:
+                    value = 0.0
+
+                action = (action_type, value, time_index)
+
+                next_state, _, _, reward, done, _ = env.step(step, action)
+
+                buf_state = np.asarray(state, dtype=np.float32)
+                buf_action = [int(action_type), float(carb_amount), float(insulin_amount), int(time_index)]
+                buf_reward = float(reward)
+                buf_value = float(value_estimate)
+                buf_logp = float(log_prob)
+
+                buffer.store(buf_state, buf_action, buf_reward, buf_value, buf_logp, bool(done))
+
+                state = next_state
+
+            # Add episode-end reward to only this episode’s steps
+            ep_end_reward = env.compute_episode_reward()
+            end_idx = len(buffer.rewards)
+            steps_this_ep = end_idx - start_idx
+            if steps_this_ep > 0:
+                add_per_step = ep_end_reward / steps_this_ep
+                for k in range(start_idx, end_idx):
+                    buffer.rewards[k] += add_per_step
+
+        # Train after all init states, then reset buffer and free memory
+        agent.train(buffer)
+        buffer.reset()
+
+        # ---- Evaluation ----
+        avg_return = evaluate_agent(env_eval, agent)
+        eval_returns.append((epoch, avg_return))
+        print(f"[Eval] Epoch {epoch}/{PPOConfig.MAX_EPOCHS} | Avg return: {avg_return:.2f}")
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # save learning curve
+    save_path = os.path.join(folder_path, "learning_curve.pkl")
+    with open(save_path, "wb") as f:
+        pickle.dump(eval_returns, f)
+
+    print("Training finished and learning curve saved.")
+
+
+def evaluate_agent(env, agent):
+    returns = []
+
+    for i in range(PPOConfig.NUM_TEST_INIT_STATE):
+        state = env.reset(state_index=i, is_testing=True)
+        total_reward = 0.0
+
+        for step in range(PPOConfig.TESTING_STEPS):
+            with torch.no_grad():
+                action_type, carb_amount, insulin_amount, time_index, _ = agent.select_action(state)
+
+            value = (
+                carb_amount if action_type == Action.EAT
+                else insulin_amount if action_type == Action.INJECT
+                else 0.0
+            )
+
+            action = (action_type, value, time_index)
+            state, _, _, reward, _, _ = env.step(step, action)
+            total_reward += reward
+
+        total_reward += env.compute_episode_reward()
+        returns.append(total_reward)
+
+    return float(np.mean(returns))
+
+
+def test_ppo(env, agent, folder_path):
+    print("Evaluating policy...")
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
-    log_path = os.path.join(folder_path, "eval_results_random.txt")
+    log_path = os.path.join(folder_path, "eval_results.txt")
     if os.path.isfile(log_path):
         os.remove(log_path)
 
@@ -28,22 +125,28 @@ def test_random_agent(env, folder_path):
     x_history = env.simulator.data.X_history
     patient_behavioral_features = extract_patient_behavior_features(x_history)
 
-    for i in range(TD3Config.NUM_TEST_INIT_STATE):
+    for i in range(PPOConfig.NUM_TEST_INIT_STATE):
         state = env.reset(state_index=i, is_testing=True)
 
         total_reward = 0
         rewards, predicted_cgms, actions, time_window = [], [], [], []
 
-        print(f"\n--------------------- Random Test {i + 1} ---------------------")
-        for step in range(TD3Config.TESTING_STEPS):
-            action = RandomAgent.get_action()  # (type, value, time_index)
-            state, predicted_cgm, time_series, reward, _, _ = env.step(step, action)
+        print(f"\n--------------------- Test {i + 1} ---------------------")
+        for step in range(PPOConfig.TESTING_STEPS):
+            action_type, carb_amount, insulin_amount, time_index, _ = agent.select_action(state)
+
+            mapped_type = action_type
+            mapped_value = carb_amount if mapped_type == Action.EAT else (insulin_amount if mapped_type == Action.INJECT else 0.0)
+            mapped_time = time_index
+
+            action = (mapped_type, mapped_value, mapped_time)
+            state, predicted_cgm, ts, reward, done, _ = env.step(step, action)
 
             total_reward += reward
             rewards.append(reward)
             actions.append(action)
             predicted_cgms.extend(predicted_cgm)
-            time_window.extend(time_series)
+            time_window.extend(ts)
 
         main_meal_actions = env.main_meal_action_log.copy()
         episode_end_reward = env.compute_episode_reward()
@@ -57,7 +160,7 @@ def test_random_agent(env, folder_path):
         test_actions.append(actions)
         test_time_window.append(time_window)
 
-        print(f"\n-------------- Results for Random Test {i + 1} ---------------\n")
+        print(f"\n-------------- Results for Test {i + 1} ---------------\n")
         print(f"Episode-end reward      : {episode_end_reward:.2f}")
         print(f"Evaluation reward       : {total_reward - episode_end_reward:.2f}")
         print(f"Total Evaluation reward : {total_reward:.2f}")
@@ -86,7 +189,7 @@ def test_random_agent(env, folder_path):
                                save_path_prefix=folder_path)
 
         with open(log_path, "a") as f:
-            f.write(f"\n--------------------- Random Agent Test {i + 1} ----------------------\n")
+            f.write(f"\n--------------------- Results for Test {i + 1} ----------------------\n")
             f.write(f"\nEpisode-end reward      : {episode_end_reward:.2f}\n")
             f.write(f"Evaluation reward       : {total_reward - episode_end_reward:.2f}\n")
             f.write(f"Total Evaluation reward : {total_reward:.2f}\n")
@@ -95,9 +198,17 @@ def test_random_agent(env, folder_path):
             f.write(f"Time-below-Range        : {tbr:.2f}%\n")
             f.write(f"Coefficient of Variation: {cv:.2f}%\n")
 
-    print("\n✅ Random Agent evaluation complete.")
-
     evaluate_performance(test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path)
+
+    if test_behavioral_features:
+        avg_features = {}
+        keys = test_behavioral_features[0].keys()
+        for key in keys:
+            values = [f[key] for f in test_behavioral_features]
+            avg_features[key] = round(np.mean(values), 2)
+
+        plot_behavior_radar(patient_behavioral_features, avg_features, save_path=folder_path)
+
 
 def evaluate_performance(test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path):
     print(f"\n----------------- Final Results ------------------")
@@ -152,13 +263,25 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
         f.write(f"History Coefficient of Variation (CV): {cal_coefficient_of_variation(y_history):.2f}%")
 
 
-def main(dataset_name, patient_id):
+def main(dataset_name, patient_id, seed):
+    device = torch.device("cpu")
+    folder_path = f"./ppo_model/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/"
+
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
-    folder_path = f'./random_model/tests/azt1d/{dataset_name}_patient_{patient_id}'
-    test_random_agent(env, folder_path=folder_path)
+    env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
+
+    agent = PPOAgent(state_dim=EnvConfig.STATE_DIM, device=device)
+    buffer = PPOBuffer(state_dim=EnvConfig.STATE_DIM, device=device)
+
+    train_ppo(env, env_eval, agent, buffer, folder_path)
+    test_ppo(env, agent, folder_path)
 
 
 if __name__ == "__main__":
-    set_seed(42)
-    for i in range(20):
-        main(dataset_name=DataConfig.DATASET, patient_id=f'{i + 1}')
+    patient_id = int(sys.argv[1])
+    seed = int(sys.argv[2])
+    set_seed(seed)
+    main(dataset_name=DataConfig.DATASET, patient_id=patient_id, seed=seed)

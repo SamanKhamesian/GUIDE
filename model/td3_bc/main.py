@@ -1,13 +1,14 @@
 import os
 import pickle
 import sys
+
 import numpy as np
 import torch
 
 from config import TD3Config, DataConfig, EnvConfig
 from environment import Environment
-from td3_bc_model.replay_buffer import ReplayBuffer
-from td3_bc_model.td3_bc_agent import TD3_BC
+from model.td3_bc.replay_buffer import ReplayBuffer
+from model.td3_bc.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
                    plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, extract_behavior_features_from_actions,
                    extract_patient_behavior_features, plot_behavior_radar)
