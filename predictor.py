@@ -45,6 +45,5 @@ class Predictor:
         print("\nCGM predictor is trained successfully!")
 
     def predict(self, X_test_seq):
-        print("\nPredicting next CGM sequence...")
         y_pred = self.model.predict(X_test_seq)
         return y_pred

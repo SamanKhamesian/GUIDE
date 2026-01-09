@@ -86,18 +86,27 @@ class PPOConfig:
 
 # CQL Model Configuration
 class CQLConfig:
-    BATCH_SIZE = 256
+    MAX_EPISODES = 20
+    MAX_STEPS_PER_EPISODE = 24
     TRAINING_STEPS = 10_000
+    TESTING_STEPS = 24
+    BATCH_SIZE = 256
+    NUM_TRAIN_INIT_STATE = 100
+    NUM_TEST_INIT_STATE = 10
 
     GAMMA = 0.98
     TAU = 0.005
 
     ACTOR_LR = 3e-4
-    CRITIC_LR = 3e-4
+    CRITIC_LR = 1e-4
 
-    CQL_ALPHA = 5.0
+    CQL_ALPHA = 0.05
     NUM_RANDOM_ACTIONS = 10
     POLICY_FREQ = 1
+    BC_WEIGHT = 2.5
+
+    CARB_RANGE = (5, 50)
+    INSULIN_RANGE = (2, 15)
 
 # Action Categories
 class Action:

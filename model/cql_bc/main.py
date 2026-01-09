@@ -5,63 +5,60 @@ import sys
 import numpy as np
 import torch
 
-from config import TD3Config, DataConfig, EnvConfig
+from config import CQLConfig, DataConfig, EnvConfig
 from environment import Environment
+from model.cql_bc.cql_agent import CQL
 from model.td3_bc.replay_buffer import ReplayBuffer
-from model.td3_bc.td3_bc_agent import TD3_BC
 from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
                    plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, extract_behavior_features_from_actions,
                    extract_patient_behavior_features, plot_behavior_radar)
 
 
 def fill_replay_buffer(env, buffer):
-    print("Filling initial replay buffer...")
-
-    for i in range(TD3Config.NUM_TRAIN_INIT_STATE):
-        for episode in range(TD3Config.MAX_EPISODES):
+    for i in range(CQLConfig.NUM_TRAIN_INIT_STATE):
+        for _ in range(CQLConfig.MAX_EPISODES):
             state = env.reset(state_index=i, is_testing=False)
-            episode_states, episode_actions, episode_rewards, episode_next_states = [], [], [], []
 
-            for step in range(TD3Config.MAX_STEPS_PER_EPISODE):
-                probs = np.random.dirichlet(np.ones(3))
-                action_type = np.argmax(probs)
-                carb_amount = np.random.uniform(*TD3Config.CARB_RANGE)
-                insulin_amount = np.random.uniform(*TD3Config.INSULIN_RANGE)
-                time_index = np.random.randint(0, 12)
+            states, actions, rewards, next_states = [], [], [], []
 
-                action_vector = np.array([probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
-                action = (action_type, carb_amount if action_type == 1 else insulin_amount, time_index)
+            for step in range(CQLConfig.MAX_STEPS_PER_EPISODE):
+                scores = np.random.randn(3)
+                action_type = np.argmax(scores)
+                carb = np.random.uniform(*CQLConfig.CARB_RANGE)
+                insulin = np.random.uniform(*CQLConfig.INSULIN_RANGE)
+                time_idx = np.random.randint(0, 12)
 
-                next_state, _, _, reward, _, _ = env.step(step, action)
+                action_vector = np.array([scores[0], scores[1], scores[2], carb, insulin, time_idx], dtype=np.float32)
+                env_action = (action_type, carb if action_type == 1 else insulin if action_type == 2 else 0.0, time_idx)
 
-                episode_states.append(state)
-                episode_actions.append(action_vector)
-                episode_rewards.append(reward)
-                episode_next_states.append(next_state)
+                next_state, _, _, reward, _, _ = env.step(step, env_action)
+
+                states.append(state)
+                actions.append(action_vector)
+                rewards.append(reward)
+                next_states.append(next_state)
 
                 state = next_state
 
-            episode_end_reward = env.compute_episode_reward()
+            episode_reward = env.compute_episode_reward()
+            rewards = [r + episode_reward / len(rewards) for r in rewards]
 
-            total_steps = len(episode_rewards)
-            adjusted_rewards = [r + (episode_end_reward / total_steps) for r in episode_rewards]
+            for s, a, r, s_next in zip(states, actions, rewards, next_states):
+                buffer.add(s, a, r, s_next, False)
 
-            for s, a, r_adj, s_next in zip(episode_states, episode_actions, adjusted_rewards, episode_next_states):
-                buffer.add(s, a, r_adj, s_next, False)
-
-    print("Replay buffer filled with episode-end rewards considered.")
+    print("Replay buffer is ready.")
 
 
-def train_td3_bc(env, agent, buffer, max_action, folder_path):
-    print("Starting TD3-BC training...")
+def train_cql(env, agent, buffer, action_low, action_high, folder_path):
+    print("Starting CQL training...")
     eval_return = []
 
-    for step in range(TD3Config.TRAINING_STEPS):
-        agent.train(buffer, batch_size=TD3Config.BATCH_SIZE)
+    for step in range(CQLConfig.TRAINING_STEPS):
+        agent.train(buffer, batch_size=CQLConfig.BATCH_SIZE)
 
         if step % 200 == 0:
-            print(f"[Train] step {step}/{TD3Config.TRAINING_STEPS}")
-            avg_return = evaluate_agent(env, agent, max_action)
+            print(f"[CQL Train] step {step}/{CQLConfig.TRAINING_STEPS}")
+            avg_return = evaluate_agent(env, agent, action_low, action_high)
             eval_return.append((step, avg_return))
 
     save_path = os.path.join(folder_path, "learning_curve.pkl")
@@ -69,29 +66,29 @@ def train_td3_bc(env, agent, buffer, max_action, folder_path):
     with open(save_path, "wb") as f:
         pickle.dump(eval_return, f)
 
-    print(f"\nTraining is finished and learning curve saved!")
+    print(f"\nCQL training finished and learning curve saved!")
 
 
-def evaluate_agent(env, agent, max_action):
+def evaluate_agent(env, agent, action_low, action_high):
     returns = []
 
-    for i in range(TD3Config.NUM_TEST_INIT_STATE):
+    for i in range(CQLConfig.NUM_TEST_INIT_STATE):
         state = env.reset(state_index=i, is_testing=True)
         total_reward = 0
 
-        for step in range(TD3Config.TESTING_STEPS):
+        for step in range(CQLConfig.TESTING_STEPS):
             raw_action = agent.select_action(state)
-            raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
+            raw_action = np.clip(raw_action, action_low, action_high)
 
-            probs = raw_action[:3]
-            action_type = int(np.argmax(probs))
-            carb_amt = raw_action[3]
-            insulin_amt = raw_action[4]
+            scores = raw_action[:3]
+            action_type = int(np.argmax(scores))
+            carb = raw_action[3]
+            insulin = raw_action[4]
+            time_idx = int(np.clip(np.round(raw_action[5]), 0, 11))
 
-            mapped_time = int(np.clip(np.round(raw_action[5]), 0, 11))
-            mapped_value = carb_amt if action_type == 1 else insulin_amt if action_type == 2 else 0.0
+            value = carb if action_type == 1 else insulin if action_type == 2 else 0.0
+            action = (action_type, value, time_idx)
 
-            action = (action_type, mapped_value, mapped_time)
             state, _, _, reward, _, _ = env.step(step, action)
             total_reward += reward
 
@@ -101,7 +98,7 @@ def evaluate_agent(env, agent, max_action):
     return np.mean(returns)
 
 
-def test_td3_bc(env, agent, max_action, folder_path):
+def test_cql(env, agent, action_low, action_high, folder_path):
     print("Evaluating policy...")
 
     log_path = os.path.join(folder_path, "eval_results.txt")
@@ -115,16 +112,16 @@ def test_td3_bc(env, agent, max_action, folder_path):
     x_history = env.simulator.data.X_history
     patient_behavioral_features = extract_patient_behavior_features(x_history)
 
-    for i in range(TD3Config.NUM_TEST_INIT_STATE):
+    for i in range(CQLConfig.NUM_TEST_INIT_STATE):
         state = env.reset(state_index=i, is_testing=True)
 
         total_reward = 0
         rewards, predicted_cgms, actions, time_window = [], [], [], []
 
         print(f"\n--------------------- Test {i + 1} ---------------------")
-        for step in range(TD3Config.TESTING_STEPS):
+        for step in range(CQLConfig.TESTING_STEPS):
             raw_action = agent.select_action(state)
-            raw_action = np.clip(raw_action, [0, 0, 0, 0, 0, 0], max_action)
+            raw_action = np.clip(raw_action, action_low, action_high)
 
             probs = raw_action[:3]
             mapped_type = int(np.argmax(probs))
@@ -260,7 +257,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./td3_bc_model/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/cql_bc/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -268,18 +265,17 @@ def main(dataset_name, patient_id, seed):
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
     env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
 
-    max_action = np.array([1.0, 1.0, 1.0, TD3Config.CARB_RANGE[1], TD3Config.INSULIN_RANGE[1], 11.0])
-    agent = TD3_BC(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
+    action_low = np.array([0, 0, 0, CQLConfig.CARB_RANGE[0], CQLConfig.INSULIN_RANGE[0], 0], dtype=np.float32)
+    action_high = np.array([1, 1, 1, CQLConfig.CARB_RANGE[1], CQLConfig.INSULIN_RANGE[1], 11], dtype=np.float32)
+    agent = CQL(state_dim=EnvConfig.STATE_DIM, action_dim=len(action_high), max_action=action_high, device=device)
     buffer = ReplayBuffer()
 
     fill_replay_buffer(env, buffer)
-    train_td3_bc(env_eval, agent, buffer, max_action, folder_path)
-    test_td3_bc(env, agent, max_action, folder_path)
-
+    train_cql(env_eval, agent, buffer, action_low, action_high, folder_path)
+    test_cql(env, agent, action_low, action_high, folder_path)
 
 if __name__ == "__main__":
     patient_id = int(sys.argv[1])
     seed = int(sys.argv[2])
     set_seed(seed)
     main(dataset_name=DataConfig.DATASET, patient_id=str(patient_id), seed=seed)
-
