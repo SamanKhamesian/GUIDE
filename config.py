@@ -108,6 +108,33 @@ class CQLConfig:
     CARB_RANGE = (5, 50)
     INSULIN_RANGE = (2, 15)
 
+
+class SACConfig:
+    MAX_EPISODES = 20
+    MAX_STEPS_PER_EPISODE = 24
+    TRAINING_STEPS = 10_000
+    TESTING_STEPS = 24
+    BATCH_SIZE = 256
+    HIDDEN_SIZE = 256
+    NUM_TRAIN_INIT_STATE = 100
+    NUM_TEST_INIT_STATE = 10
+
+    ALPHA = 0.2
+    GAMMA = 0.98
+    TAU = 0.005
+
+    ACTOR_LR = 3e-4
+    CRITIC_LR = 1e-4
+
+    LOG_STD_MIN = -20
+    LOG_STD_MAX = 2
+
+    CARB_RANGE = (5, 50)
+    INSULIN_RANGE = (2, 15)
+    TIME_INDEX_RANGE = (0, 11)
+    N_TIME_SLOTS = 12
+
+
 # Action Categories
 class Action:
     NOTHING = 0
