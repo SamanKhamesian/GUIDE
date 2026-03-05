@@ -9,6 +9,8 @@ class DataConfig:
     PATIENT_ID = "20"
     DATASET = "azt1d"
 
+    SEEDS = [42, 43, 44, 45, 46]
+    PATIENTS = list(range(1, 26))
 
 # GLIMMER Predictor Configuration
 class PredictorConfig:
@@ -110,6 +112,7 @@ class CQLConfig:
 
 
 class SACConfig:
+    MAX_EPOCHS = 20
     MAX_EPISODES = 20
     MAX_STEPS_PER_EPISODE = 24
     TRAINING_STEPS = 10_000

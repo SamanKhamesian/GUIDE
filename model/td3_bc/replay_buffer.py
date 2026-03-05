@@ -34,3 +34,6 @@ class ReplayBuffer:
             not_d = torch.FloatTensor(not_d).to(device)
 
         return s, a, r, s2, not_d
+
+    def __len__(self):
+        return len(self.storage)

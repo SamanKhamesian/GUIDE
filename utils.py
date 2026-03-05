@@ -1,5 +1,4 @@
 import os
-import pickle
 import random
 import re
 from collections import defaultdict
@@ -10,6 +9,8 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import torch
+from scipy.stats import wilcoxon
+from statsmodels.stats.multitest import multipletests
 
 from config import Action, Threshold
 
@@ -69,6 +70,159 @@ def cal_coefficient_of_variation(cgm_array):
 
     cv_percent = (std_cgm / mean_cgm) * 100
     return cv_percent
+
+
+def cal_mean_relative_deviation(x_patient, x_agent, eps=1e-6):
+    rel_dev = np.abs(x_agent - x_patient) / (np.abs(x_patient) + eps)
+    return rel_dev.mean(), rel_dev
+
+
+def cal_normalized_l2_distance(x_patient, x_agent, eps=1e-6):
+    x_p = x_patient / (x_patient + eps)
+    x_a = x_agent / (x_patient + eps)
+    return np.linalg.norm(x_a - x_p)
+
+
+def cal_pnd(x_patient, x_agent, x_avg_patient, eps=1e-6):
+    x_patient = np.asarray(x_patient, dtype=float)
+    x_agent = np.asarray(x_agent, dtype=float)
+    x_avg_patient = np.asarray(x_avg_patient, dtype=float)
+
+    return np.mean(np.abs(x_agent - x_patient) / (np.abs(x_avg_patient) + eps))
+
+
+def cal_cosine_similarity(x_patient, x_agent, eps=1e-6):
+    num = np.dot(x_patient, x_agent)
+    den = (np.linalg.norm(x_patient) * np.linalg.norm(x_agent)) + eps
+    return num / den
+
+
+def count_glycemic_events(data, threshold, mode='hyper'):
+    if mode == 'hyper':
+        condition = data[0] > threshold
+    elif mode == 'hypo':
+        condition = data[0] < threshold
+    else:
+        raise ValueError("Invalid mode. Use 'hyper' for hyperglycemia or 'hypo' for hypoglycemia.")
+
+    count = int(condition)
+
+    for value in data:
+        if mode == 'hyper':
+            if value > threshold and not condition:
+                count += 1
+                condition = True
+            elif value <= threshold and condition:
+                condition = False
+        elif mode == 'hypo':
+            if value < threshold and not condition:
+                count += 1
+                condition = True
+            elif value >= threshold and condition:
+                condition = False
+
+    return count
+
+
+def cal_wilcoxon_pair(df, algo1, algo2, metric):
+    """
+    Wilcoxon signed-rank test between two algorithms for one metric.
+
+    Returns:
+        statistic, p_value
+    """
+    x = np.array(df[algo1][metric])
+    y = np.array(df[algo2][metric])
+
+    assert len(x) == len(y), "Paired samples must have same length"
+
+    res = wilcoxon(x, y)
+    return res.pvalue, res.statistic
+
+
+def cal_wilcoxon_matrix(df, algorithms, metric, correction=None):
+    """
+    Compute pairwise Wilcoxon signed-rank p-value matrix.
+
+    correction:
+        None       -> return raw p-values
+        "holm"     -> Holm–Bonferroni correction
+        "fdr_bh"   -> Benjamini–Hochberg correction
+    """
+
+    n = len(algorithms)
+    raw_pvals = np.full((n, n), np.nan)
+
+    # Step 1: compute raw p-values (upper triangle only)
+    pval_list = []
+    pair_indices = []
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            p, _ = cal_wilcoxon_pair(df, algorithms[i], algorithms[j], metric)
+            raw_pvals[i, j] = p
+            raw_pvals[j, i] = p
+
+            pval_list.append(p)
+            pair_indices.append((i, j))
+
+    raw_df = pd.DataFrame(raw_pvals, index=algorithms, columns=algorithms)
+
+    # Step 2: apply correction if requested
+    if correction is not None:
+        rejected, adj_pvals, _, _ = multipletests(pval_list, method=correction)
+
+        adj_matrix = np.full((n, n), np.nan)
+
+        for (i, j), adj_p in zip(pair_indices, adj_pvals):
+            adj_matrix[i, j] = adj_p
+            adj_matrix[j, i] = adj_p
+
+        adj_df = pd.DataFrame(adj_matrix, index=algorithms, columns=algorithms)
+
+        print("\nRaw p-values:\n")
+        print(raw_df.to_string())
+
+        print(f"\nAdjusted p-values ({correction}):\n")
+        print(adj_df.to_string())
+
+        return raw_df, adj_df
+
+    else:
+        print("\nRaw p-values:\n")
+        print(raw_df.to_string())
+        return raw_df
+
+
+def plot_tir_comparison(df, algorithms):
+    subjects = np.arange(1, 26)
+    num_algos = len(algorithms)
+
+    bar_width = 0.125
+    x = np.arange(len(subjects))
+
+    fig, ax = plt.subplots(figsize=(16, 6))
+
+    for i, algo in enumerate(algorithms):
+        tir_values = df[algo]["tir"]
+        offset = i * bar_width
+        plt.bar(
+            x + offset,
+            tir_values,
+            width=bar_width,
+            label=algo,
+        )
+
+    plt.xlabel("Subject ID", fontsize=14)
+    plt.ylabel("Time in Range (TIR %)", fontsize=14)
+    plt.xticks(x + bar_width * (num_algos - 1) / 2, subjects, fontsize=14)
+    plt.yticks(fontsize=14)
+    ax.set_facecolor("whitesmoke")
+    plt.legend(fontsize=14, loc="lower right")
+    plt.ylim(0, 100)
+    plt.tight_layout()
+    plt.savefig("tir_comparison.png", dpi=300)
+    plt.show()
 
 
 def extract_behavior_features_from_actions(actions, main_meal_actions):
@@ -166,31 +320,71 @@ def extract_patient_behavior_features(x_patient):
             "Bolus Gap \n(min)": round(avg_bolus_gap, 2)}
 
 
-def count_glycemic_events(data, threshold, mode='hyper'):
-    if mode == 'hyper':
-        condition = data[0] > threshold
-    elif mode == 'hypo':
-        condition = data[0] < threshold
-    else:
-        raise ValueError("Invalid mode. Use 'hyper' for hyperglycemia or 'hypo' for hypoglycemia.")
+def compare_behavioral_feature_vector():
+    root = "model/cql_bc/tests/final/azt1d"
+    filename = "behavioral_features.csv"
 
-    count = int(condition)
+    all_x_patient = []
+    all_records = []
 
-    for value in data:
-        if mode == 'hyper':
-            if value > threshold and not condition:
-                count += 1
-                condition = True
-            elif value <= threshold and condition:
-                condition = False
-        elif mode == 'hypo':
-            if value < threshold and not condition:
-                count += 1
-                condition = True
-            elif value >= threshold and condition:
-                condition = False
+    for patient_dir in sorted(os.listdir(root)):
+        if not patient_dir.startswith("azt1d_patient_"):
+            continue
 
-    return count
+        if patient_dir in ['azt1d_patient_23']:
+            continue
+
+        patient_path = os.path.join(root, patient_dir)
+
+        agent_values = []
+        patient_df = None
+
+        for seed_dir in sorted(os.listdir(patient_path)):
+            if not seed_dir.startswith("seed_"):
+                continue
+
+            csv_path = os.path.join(patient_path, seed_dir, filename)
+            if not os.path.exists(csv_path):
+                continue
+
+            df = pd.read_csv(csv_path)
+
+            # patient values are identical across seeds → take once
+            if patient_df is None:
+                patient_df = df[["feature", "patient"]]
+
+            agent_values.append(df["agent"].values)
+
+        # average agent over seeds
+        agent_mean = np.mean(agent_values, axis=0)
+
+        behavioral_df = patient_df.copy()
+        behavioral_df["agent"] = agent_mean
+
+        agent_dic = {
+            row["feature"]: round(row["agent"], 2)
+            for _, row in behavioral_df.iterrows()
+        }
+
+        patient_dic = {
+            row["feature"]: round(row["patient"], 2)
+            for _, row in behavioral_df.iterrows()
+        }
+
+        plot_behavior_radar(patient_dic, agent_dic, patient_path)
+
+        x_patient = np.array(behavioral_df["patient"].values)
+        x_agent = np.array(behavioral_df["agent"].values)
+
+        all_x_patient.append(x_patient)
+        all_records.append((patient_dir, x_patient, x_agent))
+
+    x_avg_patient = np.mean(np.stack(all_x_patient), axis=0)
+
+    for patient_dir, x_patient, x_agent in all_records:
+        pnd = cal_pnd( x_patient=x_patient, x_agent=x_agent, x_avg_patient=x_avg_patient)
+        cosin = cal_cosine_similarity(x_patient, x_agent)
+        mrd = cal_mean_relative_deviation(x_patient, x_agent)
 
 
 def plot_cgm_reward_action(cgm_sequence,
@@ -533,83 +727,3 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
 
     if show:
         plt.show()
-
-
-def plot_behavior_bar(real_features, agent_features, save_path, show=False):
-    labels = list(real_features.keys())
-    real_vals = list(real_features.values())
-    agent_vals = list(agent_features.values())
-
-    x = np.arange(len(labels))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(x - width / 2, real_vals, width, label='Patient', color='skyblue')
-    ax.bar(x + width / 2, agent_vals, width, label='RL Agent', color='salmon')
-
-    ax.set_ylabel('Value')
-    ax.set_title('Behavioral Feature Comparison')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=30, ha='right')
-    ax.legend()
-    ax.grid(True, linestyle='--', alpha=0.5)
-
-    plt.tight_layout()
-    plt.savefig(f'{save_path}/behavioral_comparison_bar.png', dpi=300)
-
-    if show:
-        plt.show()
-
-
-def plot_learning_curve(base_path, seeds, title=None):
-    all_returns = []
-    steps = None
-
-    for seed in seeds:
-        path = os.path.join(base_path, f"seed_{seed}", "learning_curve.pkl")
-        with open(path, "rb") as f:
-            curve = pickle.load(f)
-
-        seed_steps = [x[0] for x in curve]
-        seed_returns = [x[1] for x in curve]
-
-        if steps is None:
-            steps = seed_steps
-        else:
-            assert steps == seed_steps, "Mismatch in evaluation steps across seeds"
-
-        all_returns.append(seed_returns)
-
-    all_returns = np.array(all_returns)
-
-    mean_returns = all_returns.mean(axis=0)
-    std_returns = all_returns.std(axis=0)
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(steps, mean_returns, label="Mean Return")
-    plt.fill_between(
-        steps,
-        mean_returns - std_returns,
-        mean_returns + std_returns,
-        alpha=0.3,
-        label="±1 STD"
-    )
-
-    plt.xlabel("Training steps")
-    plt.ylabel("Average Evaluation Return (Total Reward per Episode)")
-    if title is not None:
-        plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
-if __name__ == '__main__':
-    patient_features = {"Number of Injections": 4.2, "Total Bolus Units": 28.5, "Number of Meals": 3.8, "Total Carb (gram)": 195.0,
-                        "Bolus to Carb Ratio": 0.15, "Meal Gap (min)": 280.0, "Bolus Gap (min)": 220.0}
-
-    agent_features = {"Number of Injections": 3.0, "Total Bolus Units": 24.0, "Number of Meals": 4.0, "Total Carb (gram)": 160.0,
-                      "Bolus to Carb Ratio": 0.18, "Meal Gap (min)": 240.0, "Bolus Gap (min)": 180.0}
-
-    plot_behavior_radar(patient_features, agent_features, save_path="test_output")

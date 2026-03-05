@@ -1,7 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Unused files/directories
 dataset/
 tests/
 archive.py
+bash.sh
 
 **/.DS_Store
 
