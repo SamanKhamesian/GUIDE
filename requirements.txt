@@ -1,0 +1,8 @@
+matplotlib==3.10.8
+numpy==2.4.2
+pandas==3.0.1
+scikit_learn==1.8.0
+scipy==1.17.1
+statsmodels==0.14.6
+tensorflow==2.20.0
+torch==2.7.0
