@@ -260,7 +260,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./td3_bc_model/tests/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/td3_bc/tests/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
