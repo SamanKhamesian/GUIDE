@@ -265,7 +265,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f"./ppo_model/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/"
+    folder_path = f"./ppo_model/tests/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/"
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -281,7 +281,5 @@ def main(dataset_name, patient_id, seed):
 
 
 if __name__ == "__main__":
-    patient_id = int(sys.argv[1])
-    seed = int(sys.argv[2])
-    set_seed(seed)
-    main(dataset_name=DataConfig.DATASET, patient_id=patient_id, seed=seed)
+    set_seed(DataConfig.SEEDS[0])
+    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID), seed=DataConfig.SEEDS[0])

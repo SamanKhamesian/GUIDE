@@ -275,7 +275,5 @@ def main(dataset_name, patient_id, seed):
     test_cql(env, agent, action_low, action_high, folder_path)
 
 if __name__ == "__main__":
-    patient_id = int(sys.argv[1])
-    seed = int(sys.argv[2])
-    set_seed(seed)
-    main(dataset_name=DataConfig.DATASET, patient_id=str(patient_id), seed=seed)
+    set_seed(DataConfig.SEEDS[0])
+    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID), seed=DataConfig.SEEDS[0])

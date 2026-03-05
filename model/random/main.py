@@ -169,6 +169,7 @@ def main(dataset_name, patient_id):
 
 
 if __name__ == "__main__":
-    set_seed(42)
-    for i in [21, 22, 23, 24, 25]:
-        main(dataset_name=DataConfig.DATASET, patient_id=f'{i}')
+    for s in DataConfig.SEEDS:
+        set_seed(s)
+        for i in DataConfig.PATIENTS:
+            main(dataset_name=DataConfig.DATASET, patient_id=f'{i}')
