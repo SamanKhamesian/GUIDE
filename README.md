@@ -5,12 +5,10 @@
 Type 1 Diabetes (T1D) management requires continuous adjustment of insulin and lifestyle behaviors to maintain blood glucose within a safe target range. 
 Although automated insulin delivery (AID) systems have improved glycemic outcomes, many patients still fail to achieve recommended clinical targets, warranting new approaches to improve glucose control in patients with T1D. 
 While reinforcement learning (RL) has been utilized as a promising approach, current RL-based methods focus primarily on insulin-only treatment and do not provide behavioral recommendations for glucose control. 
-To address this gap, we propose GUIDE, an RL-based decision-support framework designed to complement AID technologies by providing behavioral action recommendations for just-in-time prevention of abnormal glucose events. 
-GUIDE generates structured actions that jointly model action type, magnitude, and timing, including bolus insulin administration and carbohydrate intake actions. 
+To address this gap, we propose GUIDE, an RL-based decision-support framework designed to complement AID technologies by providing behavioral recommendations to prevent abnormal glucose events. 
+GUIDE generates structured actions defined by intervention type, magnitude, and timing, including bolus insulin administration and carbohydrate intake events. 
 GUIDE integrates a patient-specific glucose level predictor trained on real-world continuous glucose monitoring data and supports both offline and online RL algorithms within a unified environment. 
-We evaluate off-policy and on-policy methods across 25 individuals with T1D using standardized glycemic metrics. 
-Among the evaluated approaches, the CQL-BC demonstrates the highest average time-in-range, reaching 85.49% while maintaining low hypoglycemia exposures. 
-Behavioral similarity analysis further indicates that the learned CQL-BC policy preserves key structural characteristics of patient action patterns, achieving a mean cosine similarity of 0.87 ± 0.09 across subjects. 
+We evaluate both off-policy and on-policy methods across 25 individuals with T1D using standardized glycemic metrics. Among the evaluated approaches, the CQL-BC algorithm demonstrates the highest average time-in-range, reaching 85.49% while maintaining low hypoglycemia exposures. Behavioral similarity analysis further indicates that the learned CQL-BC policy preserves key structural characteristics of patient action patterns, achieving a mean cosine similarity of 0.87 ± 0.09 across subjects. 
 These findings suggest that conservative offline RL with a structured behavioral action space can provide clinically meaningful and behaviorally plausible decision support for personalized diabetes management.
 
 ---
