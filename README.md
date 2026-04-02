@@ -63,7 +63,15 @@ These findings suggest that conservative offline RL with a structured behavioral
 If you use GLIMMER in your work, please cite:
 
 ```bibtex
-@article{khamesian2026guide}
+@misc{khamesian2026guidereinforcementlearningbehavioral,
+      title={GUIDE: Reinforcement Learning for Behavioral Action Support in Type 1 Diabetes}, 
+      author={Saman Khamesian and Sri Harini Balaji and Di Yang Shi and Stephanie M. Carpenter and Daniel E. Rivera and W. Bradley Knox and Peter Stone and Hassan Ghasemzadeh},
+      year={2026},
+      eprint={2604.00385},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2604.00385}, 
+}
 ```
 
 ---
