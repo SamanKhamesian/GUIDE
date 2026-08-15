@@ -727,3 +727,110 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
 
     if show:
         plt.show()
+
+
+def plot_glucose_reward_function():
+    # ---------------------------
+    # Parameters (you can change these)
+    # ---------------------------
+    T_hypo = 70
+    T_hyper = 180
+    g_star = (T_hypo + T_hyper) / 2  # midpoint
+
+    lambda_hypo = 7
+    lambda_hyper = 2
+    lambda_normal = 100
+
+    # ---------------------------
+    # Reward function
+    # ---------------------------
+    def r_g(g):
+        if g < T_hypo:
+            return -lambda_hypo * (T_hypo - g)
+        elif g <= T_hyper:
+            return lambda_normal * (1 - (2 * abs(g - g_star) / (T_hyper - T_hypo)))
+        else:
+            return -lambda_hyper * (g - T_hyper)
+
+    # Vectorize for numpy
+    r_g_vec = np.vectorize(r_g)
+
+    # ---------------------------
+    # Generate glucose values
+    # ---------------------------
+    g_values = np.linspace(50, 300, 500)
+    r_values = r_g_vec(g_values)
+
+    # ---------------------------
+    # Plot
+    # ---------------------------
+    plt.figure(figsize=(6, 3.5))
+    plt.plot(g_values, r_values, label="Glycemic Reward", color="black")
+    plt.axvline(T_hypo, linestyle="--", label=r"$T_{\mathrm{hypo}}$ (70 mg/dL)", color="tab:red")
+    plt.axvline(T_hyper, linestyle="--", label=r"$T_{\mathrm{hyper}}$ (180 mg/dL)", color="navy")
+    plt.axvline(g_star, linestyle=":", label=r"$g^\star$ (125 mg/dL)", color="gray")
+
+    plt.gca().set_facecolor("whitesmoke")
+    plt.xlabel("Glucose (mg/dL)")
+    plt.ylabel(r"Reward $\tilde{r}_g(g)$")
+    plt.legend()
+    plt.grid(True, linewidth=0.25)
+    plt.tight_layout()
+    plt.savefig("reward.png", dpi=300)
+
+
+def plot_basal_generator_function():
+    # ---------------------------
+    # Parameters
+    # ---------------------------
+    T_hypo = 70
+    T_lower = 100
+    T_hyper = 180
+    T_upper = 250
+
+    # ---------------------------
+    # Basal insulin function
+    # ---------------------------
+    def basal_rate(g_bar):
+        if g_bar <= 70:
+            return 0.0
+        elif g_bar < 100:
+            return (g_bar - 70) / 30
+        elif g_bar <= 180:
+            return 1.0
+        elif g_bar <= 250:
+            return 1.0 + (g_bar - 180) / 70
+        else:
+            return 2.0
+
+    # Explicitly preserve floating-point values
+    basal_rate_vec = np.vectorize(basal_rate, otypes=[float])
+
+    g_values = np.linspace(50, 300, 500)
+    basal_values = basal_rate_vec(g_values)
+
+    # ---------------------------
+    # Plot
+    # ---------------------------
+    plt.figure(figsize=(6, 3.5))
+    plt.plot(g_values, basal_values, color="black", linewidth=2, label="Basal insulin rate")
+
+    # Clinical glucose thresholds
+    plt.axvline(T_hypo, color="tab:red", linestyle="--", label=r"$T_{\mathrm{hypo}}$ (70 mg/dL)")
+    plt.axvline(T_hyper, color="navy", linestyle="--", label=r"$T_{\mathrm{hyper}}$ (180 mg/dL)")
+
+    # Additional transition points
+    plt.axvline(T_lower, color="gray", linestyle=":", label="Intermediate thresholds")
+    plt.axvline(T_upper, color="gray", linestyle=":")
+
+    plt.gca().set_facecolor("whitesmoke")
+    plt.xlabel(r"Mean Glucose $\bar{g}$ (mg/dL)")
+    plt.ylabel("Basal Insulin Rate (U/h)")
+    plt.xlim(50, 300)
+    plt.ylim(-0.05, 2.1)
+    plt.yticks([0, 0.5, 1, 1.5, 2])
+    plt.legend(loc="lower right")
+    plt.grid(True, linewidth=0.25)
+    plt.tight_layout()
+    plt.savefig("basal_insulin_generator.png", dpi=300, bbox_inches="tight")
+    plt.show()

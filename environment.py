@@ -10,8 +10,8 @@ class Environment:
         self.simulator = Simulator(dataset_name=dataset_name, patient_id=patient_id)
         self.simulator.train()
 
-        # 7 features, and 6-hour data for each
-        # features: [hour, sleep, time_since_last_meal, time_since_last_insulin, carbs, bolus, cgm]
+        # 8 features, and 6-hour data for each
+        # features: [hour, sleep, time_since_last_meal, time_since_last_insulin, carbs, bolus, basal, cgm]
         self.state_size = EnvConfig.STATE_DIM
         self.action_space = [Action.NOTHING, Action.EAT, Action.INJECT]
 
@@ -31,9 +31,9 @@ class Environment:
 
     def get_state(self):
         window = self.get_window()
-        # remove basal from state (it's only been in the glimmer input)
-        window = np.delete(window, 6, axis=1)
-        return window[:, :7].flatten()
+        # Old: remove basal from state (it's only been in the glimmer input)
+        # Old: window = np.delete(window, 6, axis=1)
+        return window[:, :8].flatten()
 
     def get_time_series(self):
         return self.simulator.get_time_window()

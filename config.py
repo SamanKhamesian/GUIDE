@@ -26,7 +26,7 @@ class PredictorConfig:
 
 
 class EnvConfig:
-    STATE_DIM = 6 * 12 * 7
+    STATE_DIM = 6 * 12 * 8
 
     CARB_RANGE = (5, 50)
     INSULIN_RANGE = (2, 15)
