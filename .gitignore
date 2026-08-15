@@ -2,6 +2,7 @@
 dataset/
 tests/
 archive.py
+GUIDE_Major_Revision_Plan.md
 
 *.sh
 

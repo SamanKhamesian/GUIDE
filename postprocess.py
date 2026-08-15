@@ -2,8 +2,8 @@ import os
 import re
 
 import numpy as np
-from utils import cal_wilcoxon_matrix
 
+from utils import cal_wilcoxon_matrix, compare_behavioral_feature_vector
 
 PATIENTS = list(range(1, 26))
 SEEDS = [42, 43, 44, 45, 46]
@@ -146,13 +146,22 @@ if __name__ == "__main__":
     df = {}
 
     for algorithm, config in ALGORITHMS.items():
-        df[algorithm] = collect_algorithm_results(
-            base_path=config["path"],
-            filename=config["filename"],
-            use_seed_folder=config["use_seed_folder"],
-        )
+        df[algorithm] = collect_algorithm_results(base_path=config["path"],
+                                                  filename=config["filename"],
+                                                  use_seed_folder=config["use_seed_folder"],)
 
     print_df(df)
     print_final_results(df)
 
-    cal_wilcoxon_matrix(df, ["TD3-BC", "CQL-BC", "PPO", "SAC-Offline", "SAC-Online", "Random"], "tir", correction="holm")
+    cal_wilcoxon_matrix(df,["TD3-BC", "CQL-BC", "PPO", "SAC-Offline", "SAC-Online", "Random"],"tir", correction="holm",)
+    behavioral_metrics_df = compare_behavioral_feature_vector(root=ALGORITHMS["CQL-BC"]["path"])
+
+    print("\nBehavioral Similarity Metrics:")
+    print(behavioral_metrics_df.round(3).to_string(index=False))
+
+    metric_columns = ["cosine_similarity", "mrd", "normalized_l1_distance", ]
+    summary_df = (behavioral_metrics_df[metric_columns].agg(["mean", "median", "std"]).T)
+    summary_df.columns = ["Mean", "Median", "STD"]
+
+    print("\nBehavioral Metrics Summary Across Patients:")
+    print(summary_df.round(3).to_string())

@@ -72,28 +72,31 @@ def cal_coefficient_of_variation(cgm_array):
     return cv_percent
 
 
-def cal_mean_relative_deviation(x_patient, x_agent, eps=1e-6):
-    rel_dev = np.abs(x_agent - x_patient) / (np.abs(x_patient) + eps)
-    return rel_dev.mean(), rel_dev
-
-
-def cal_normalized_l2_distance(x_patient, x_agent, eps=1e-6):
-    x_p = x_patient / (x_patient + eps)
-    x_a = x_agent / (x_patient + eps)
-    return np.linalg.norm(x_a - x_p)
-
-
-def cal_pnd(x_patient, x_agent, x_avg_patient, eps=1e-6):
+def normalize_behavioral_features(x_patient, x_agent, x_avg_patient, eps=1e-6):
     x_patient = np.asarray(x_patient, dtype=float)
     x_agent = np.asarray(x_agent, dtype=float)
     x_avg_patient = np.asarray(x_avg_patient, dtype=float)
 
-    return np.mean(np.abs(x_agent - x_patient) / (np.abs(x_avg_patient) + eps))
+    scale = np.abs(x_avg_patient) + eps
+
+    x_patient_norm = x_patient / scale
+    x_agent_norm = x_agent / scale
+
+    return x_patient_norm, x_agent_norm
 
 
-def cal_cosine_similarity(x_patient, x_agent, eps=1e-6):
-    num = np.dot(x_patient, x_agent)
-    den = (np.linalg.norm(x_patient) * np.linalg.norm(x_agent)) + eps
+def cal_mean_relative_deviation(x_patient_norm, x_agent_norm, eps=1e-6):
+    rel_dev = np.abs(x_agent_norm - x_patient_norm) / (np.abs(x_patient_norm) + eps)
+    return rel_dev.mean(), rel_dev
+
+
+def cal_normalized_l1_distance(x_patient_norm, x_agent_norm):
+    return np.mean(np.abs(x_agent_norm - x_patient_norm))
+
+
+def cal_cosine_similarity(x_patient_norm, x_agent_norm, eps=1e-6):
+    num = np.dot(x_patient_norm, x_agent_norm)
+    den = (np.linalg.norm(x_patient_norm) * np.linalg.norm(x_agent_norm)) + eps
     return num / den
 
 
@@ -320,12 +323,12 @@ def extract_patient_behavior_features(x_patient):
             "Bolus Gap \n(min)": round(avg_bolus_gap, 2)}
 
 
-def compare_behavioral_feature_vector():
-    root = "model/cql_bc/tests/final/azt1d"
+def compare_behavioral_feature_vector(root="model/cql_bc/tests/final/azt1d", output_filename="behavioral_similarity_metrics.csv"):
     filename = "behavioral_features.csv"
 
     all_x_patient = []
     all_records = []
+    metric_records = []
 
     for patient_dir in sorted(os.listdir(root)):
         if not patient_dir.startswith("azt1d_patient_"):
@@ -371,7 +374,7 @@ def compare_behavioral_feature_vector():
             for _, row in behavioral_df.iterrows()
         }
 
-        plot_behavior_radar(patient_dic, agent_dic, patient_path)
+        plot_behavior_radar(patient_dic, agent_dic, patient_path, False)
 
         x_patient = np.array(behavioral_df["patient"].values)
         x_agent = np.array(behavioral_df["agent"].values)
@@ -382,9 +385,37 @@ def compare_behavioral_feature_vector():
     x_avg_patient = np.mean(np.stack(all_x_patient), axis=0)
 
     for patient_dir, x_patient, x_agent in all_records:
-        pnd = cal_pnd( x_patient=x_patient, x_agent=x_agent, x_avg_patient=x_avg_patient)
-        cosin = cal_cosine_similarity(x_patient, x_agent)
-        mrd = cal_mean_relative_deviation(x_patient, x_agent)
+        x_patient_norm, x_agent_norm = normalize_behavioral_features(
+            x_patient=x_patient,
+            x_agent=x_agent,
+            x_avg_patient=x_avg_patient
+        )
+
+        normalized_l1 = cal_normalized_l1_distance(
+            x_patient_norm,
+            x_agent_norm
+        )
+        cosine_similarity = cal_cosine_similarity(
+            x_patient_norm,
+            x_agent_norm
+        )
+        mrd, rel_dev = cal_mean_relative_deviation(
+            x_patient_norm,
+            x_agent_norm
+        )
+
+        metric_records.append({
+            "patient": patient_dir,
+            "cosine_similarity": cosine_similarity,
+            "mrd": mrd,
+            "normalized_l1_distance": normalized_l1
+        })
+
+    metrics_df = pd.DataFrame(metric_records)
+    metrics_df = metrics_df.sort_values(by="patient", key=lambda column: column.str.extract(r"(\d+)$")[0].astype(int)).reset_index(drop=True)
+    metrics_df.to_csv(os.path.join(root, output_filename), index=False)
+
+    return metrics_df
 
 
 def plot_cgm_reward_action(cgm_sequence,
