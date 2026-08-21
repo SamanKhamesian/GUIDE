@@ -1,6 +1,5 @@
 import os
 import pickle
-import sys
 
 import numpy as np
 import torch
@@ -8,45 +7,10 @@ import torch
 from config import CQLConfig, DataConfig, EnvConfig
 from environment import Environment
 from model.cql_bc.cql_agent import CQL
-from model.td3_bc.replay_buffer import ReplayBuffer
+from replay_buffer import ReplayBuffer
 from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
                    plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, extract_behavior_features_from_actions,
                    extract_patient_behavior_features, plot_behavior_radar)
-
-
-def fill_replay_buffer(env, buffer):
-    for i in range(CQLConfig.NUM_TRAIN_INIT_STATE):
-        for _ in range(CQLConfig.MAX_EPISODES):
-            state = env.reset(state_index=i, is_testing=False)
-
-            states, actions, rewards, next_states = [], [], [], []
-
-            for step in range(CQLConfig.MAX_STEPS_PER_EPISODE):
-                scores = np.random.randn(3)
-                action_type = np.argmax(scores)
-                carb = np.random.uniform(*CQLConfig.CARB_RANGE)
-                insulin = np.random.uniform(*CQLConfig.INSULIN_RANGE)
-                time_idx = np.random.randint(0, 12)
-
-                action_vector = np.array([scores[0], scores[1], scores[2], carb, insulin, time_idx], dtype=np.float32)
-                env_action = (action_type, carb if action_type == 1 else insulin if action_type == 2 else 0.0, time_idx)
-
-                next_state, _, _, reward, _, _ = env.step(step, env_action)
-
-                states.append(state)
-                actions.append(action_vector)
-                rewards.append(reward)
-                next_states.append(next_state)
-
-                state = next_state
-
-            episode_reward = env.compute_episode_reward()
-            rewards = [r + episode_reward / len(rewards) for r in rewards]
-
-            for s, a, r, s_next in zip(states, actions, rewards, next_states):
-                buffer.add(s, a, r, s_next, False)
-
-    print("Replay buffer is ready.")
 
 
 def train_cql(env, agent, buffer, action_low, action_high, folder_path):
@@ -257,7 +221,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./model/cql_bc/tests/final/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/cql_bc/temp/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -268,9 +232,10 @@ def main(dataset_name, patient_id, seed):
     action_low = np.array([0, 0, 0, CQLConfig.CARB_RANGE[0], CQLConfig.INSULIN_RANGE[0], 0], dtype=np.float32)
     action_high = np.array([1, 1, 1, CQLConfig.CARB_RANGE[1], CQLConfig.INSULIN_RANGE[1], 11], dtype=np.float32)
     agent = CQL(state_dim=EnvConfig.STATE_DIM, action_dim=len(action_high), max_action=action_high, device=device)
-    buffer = ReplayBuffer()
 
-    fill_replay_buffer(env, buffer)
+    buffer = ReplayBuffer()
+    buffer.fill_replay_buffer(env, seed)
+
     train_cql(env_eval, agent, buffer, action_low, action_high, folder_path)
     test_cql(env, agent, action_low, action_high, folder_path)
 

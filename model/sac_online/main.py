@@ -1,6 +1,5 @@
 import os
 import pickle
-import sys
 
 import numpy as np
 import torch
@@ -9,7 +8,7 @@ from config import Action
 from config import SACConfig, EnvConfig, DataConfig
 from environment import Environment
 from model.sac.sac_agent import SACAgent
-from model.td3_bc.replay_buffer import ReplayBuffer
+from replay_buffer import ReplayBuffer
 from utils import (plot_cgm_reward_action, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
                    plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, extract_behavior_features_from_actions,
                    extract_patient_behavior_features, plot_behavior_radar, set_seed)
@@ -269,10 +268,9 @@ def main(dataset_name, patient_id, seed):
     env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
 
     max_action = np.array([1.0, 1.0, 1.0, SACConfig.CARB_RANGE[1], SACConfig.INSULIN_RANGE[1], 11.0])
-
     agent = SACAgent(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
-    buffer = ReplayBuffer()
 
+    buffer = ReplayBuffer()
     train_sac_online(env, env_eval, agent, buffer, folder_path)
     test_sac(env, agent, folder_path)
 

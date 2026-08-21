@@ -163,11 +163,11 @@ class DataController:
 
         self.__preprocessor = Preprocessor()
 
-        self.X_history, self.y_history, self.X_test, self.y_test = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
-        X_train = self.X_history[:, 1:]
-        X_test = self.X_test[:, 1:]
-        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_train, self.y_history)
-        self.X_rl_train, self.X_rl_test, self._y_rl_train_, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_test, self.y_test)
+        self.X_history, self.y_history, self.X_reserved, self.y_reserved = self.__preprocessor.create_input_features(dataset_name=dataset_name, patient_id=patient_id)
+        X_history = self.X_history[:, 1:]
+        X_reserved = self.X_reserved[:, 1:]
+        self.X_predictor_train, self.y_predictor_train, self.X_predictor_val, self.y_predictor_val = self.__preprocessor.create_train_val_data(X_history, self.y_history)
+        self.X_rl_train, self.X_rl_test, self._y_rl_train_, self.y_rl_test = self.__preprocessor.create_rl_train_test_data(X_reserved, self.y_reserved)
 
         self.X = self.X_rl_train[0][None, :, :]
 

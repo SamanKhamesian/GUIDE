@@ -1,6 +1,5 @@
 import os
 import pickle
-import sys
 
 import numpy as np
 import torch
@@ -8,49 +7,10 @@ import torch
 from config import SACConfig, EnvConfig, DataConfig
 from environment import Environment
 from model.sac.sac_agent import SACAgent
-from model.td3_bc.replay_buffer import ReplayBuffer
+from replay_buffer import ReplayBuffer
 from utils import (plot_cgm_reward_action, cal_time_in_range, cal_time_below_range, cal_time_above_range, cal_coefficient_of_variation,
                    plot_tir_tbr_tar, plot_eat_action_distribution, plot_insulin_action_distribution, extract_behavior_features_from_actions,
                    extract_patient_behavior_features, plot_behavior_radar, set_seed)
-
-
-def fill_replay_buffer(env, buffer):
-    print("Filling initial replay buffer for SAC ...")
-
-    for i in range(SACConfig.NUM_TRAIN_INIT_STATE):
-        for episode in range(SACConfig.MAX_EPISODES):
-            state = env.reset(state_index=i, is_testing=False)
-            episode_states, episode_actions, episode_rewards, episode_next_states = [], [], [], []
-
-            for step in range(SACConfig.MAX_STEPS_PER_EPISODE):
-                probs = np.random.dirichlet(np.ones(3))
-                action_type = np.argmax(probs)
-                carb_amount = np.random.uniform(*SACConfig.CARB_RANGE)
-                insulin_amount = np.random.uniform(*SACConfig.INSULIN_RANGE)
-                time_index = np.random.randint(0, 12)
-
-                action_vector = np.array([probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
-                action = (action_type, carb_amount if action_type == 1 else insulin_amount, time_index)
-
-                next_state, _, _, reward, _, _ = env.step(step, action)
-
-                episode_states.append(state)
-                episode_actions.append(action_vector)
-                episode_rewards.append(reward)
-                episode_next_states.append(next_state)
-
-                state = next_state
-
-            episode_end_reward = env.compute_episode_reward()
-
-            total_steps = len(episode_rewards)
-            adjusted_rewards = [r + (episode_end_reward / total_steps) for r in episode_rewards]
-
-            for s, a, r_adj, s_next in zip(episode_states, episode_actions, adjusted_rewards, episode_next_states):
-                buffer.add(s, a, r_adj, s_next, False)
-
-    print("Replay buffer filled for SAC.")
-
 
 
 def train_sac(env, agent, buffer, folder_path):
@@ -243,7 +203,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./model/sac/tests/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/sac/temp/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -255,8 +215,8 @@ def main(dataset_name, patient_id, seed):
     agent = SACAgent(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
 
     buffer = ReplayBuffer()
+    buffer.fill_replay_buffer(env, seed)
 
-    fill_replay_buffer(env, buffer)
     train_sac(env_eval, agent, buffer, folder_path)
     test_sac(env, agent, folder_path)
 

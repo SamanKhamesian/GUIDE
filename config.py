@@ -32,6 +32,15 @@ class EnvConfig:
     INSULIN_RANGE = (2, 15)
 
 
+class OfflineBufferConfig:
+    NUM_TRAIN_INIT_STATE = 100
+    MAX_EPISODES = 20
+    MAX_STEPS_PER_EPISODE = 24
+
+    CARB_RANGE = EnvConfig.CARB_RANGE
+    INSULIN_RANGE = EnvConfig.INSULIN_RANGE
+
+
 class RewardShaping:
     IDEAL_CGM = 125
     WEIGHTS = [100, 7.0, 2.0]
