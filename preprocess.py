@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from config import PredictorConfig, Threshold, SleepTime, TD3Config
+from config import PredictorConfig, Threshold, SleepTime
 
 
 class Preprocessor:

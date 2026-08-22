@@ -1,8 +1,7 @@
 # Unused files/directories
 dataset/
 tests/
-archive.py
-GUIDE_Major_Revision_Plan.md
+archive/
 
 *.sh
 
