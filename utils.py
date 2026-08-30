@@ -225,7 +225,7 @@ def plot_tir_comparison(df, algorithms):
     plt.ylim(0, 100)
     plt.tight_layout()
     plt.savefig("tir_comparison.png", dpi=300)
-    plt.show()
+    plt.close()
 
 
 def extract_behavior_features_from_actions(actions, main_meal_actions):
@@ -542,9 +542,7 @@ def plot_cgm_reward_action(cgm_sequence,
 
     plt.tight_layout()
     plt.savefig(f"{save_path_prefix}/test_{test_index}_results.png", dpi=300)
-
-    if show:
-        plt.show()
+    plt.close()
 
 
 def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Range Metrics Across Tests', show=False):
@@ -569,9 +567,7 @@ def plot_tir_tbr_tar(tir_list, tar_list, tbr_list, save_path, title='Glucose Ran
     plt.legend()
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-
-    if show:
-        plt.show()
+    plt.close()
 
 
 def plot_eat_action_distribution(test_actions, test_time_window, save_path, show=False):
@@ -618,9 +614,7 @@ def plot_eat_action_distribution(test_actions, test_time_window, save_path, show
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_carb_amount.png', dpi=300)
-
-    if show:
-        plt.show()
+    plt.close()
 
 
 def plot_insulin_action_distribution(test_actions, test_time_window, save_path, show=False):
@@ -654,8 +648,6 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path, 
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_distribution.png', dpi=300)
 
-    if show:
-        plt.show()
 
     # Plot 2: Average insulin amount with std dev
     plt.figure(figsize=(10, 5))
@@ -668,8 +660,7 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path, 
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_amount.png', dpi=300)
 
-    if show:
-        plt.show()
+    plt.close()
 
 
 def plot_behavior_radar(patient, agent, save_path, show=False):
@@ -755,9 +746,7 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
 
     plt.tight_layout()
     plt.savefig(f'{save_path}/behavioral_comparison_radar.png', dpi=300)
-
-    if show:
-        plt.show()
+    plt.close()
 
 
 def plot_glucose_reward_function():
@@ -808,6 +797,7 @@ def plot_glucose_reward_function():
     plt.grid(True, linewidth=0.25)
     plt.tight_layout()
     plt.savefig("reward.png", dpi=300)
+    plt.close()
 
 
 def plot_basal_generator_function():
@@ -864,4 +854,4 @@ def plot_basal_generator_function():
     plt.grid(True, linewidth=0.25)
     plt.tight_layout()
     plt.savefig("basal_insulin_generator.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
