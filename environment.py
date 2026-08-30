@@ -1,6 +1,7 @@
 import numpy as np
 
 from config import RewardShaping, Action, Threshold, EnvConfig
+from bolus_safeguard import apply_bolus_safeguard
 from simulator import Simulator
 from utils import cal_time_in_range, count_glycemic_events
 
@@ -25,6 +26,12 @@ class Environment:
         self.current_hour = self.get_current_hour()
         self.sleep_mode = self.get_sleep_signal()
         self.episode_cgm_history = []
+
+        # Keep the agent proposals and final executed actions separately so
+        # safeguard intervention rates and dose changes can be analyzed later.
+        self.proposed_action_log = []
+        self.executed_action_log = []
+        self.safeguard_log = []
 
     def get_window(self):
         return self.simulator.get_full_current_window()
@@ -64,9 +71,16 @@ class Environment:
         self.sleep_mode = self.get_sleep_signal()
         self.episode_cgm_history = []
 
+        # Action logs are episode-specific and remain aligned by step index.
+        self.proposed_action_log = []
+        self.executed_action_log = []
+        self.safeguard_log = []
+
         return self.current_state
 
     def step(self, step_idx, action):
+        proposed_action = action
+
         # Step 1: Predict next CGM values
         predicted_cgm = self.simulator.predict_next_cgm()
         main_meal_action = None
@@ -83,9 +97,18 @@ class Environment:
 
         basal_array = [self.simulator.heuristic_basal_controller(predicted_cgm)] * 12
 
-        # Step 3: Apply action to simulator
+        # Step 2.75: Convert the policy proposal into the executed action using
+        # the centralized bolus safeguard. The RL action space is unchanged.
+        executed_action, safeguard_decision = apply_bolus_safeguard(proposed_action, self.simulator.get_current_bolus_history())
+        safeguard_decision["step_idx"] = step_idx
+
+        self.proposed_action_log.append(proposed_action)
+        self.executed_action_log.append(executed_action)
+        self.safeguard_log.append(safeguard_decision)
+
+        # Step 3: Apply only the executed action to the simulator
         bolus_array, time_since_last_injection_array, carb_array, time_since_last_meal_array = (
-            self.simulator.apply_action_to_inputs(self.full_current_window, action, main_meal_action))
+            self.simulator.apply_action_to_inputs(self.full_current_window, executed_action, main_meal_action))
 
         # Step 4: Commit inputs and predicted CGM
         self.simulator.commit_next_input(predicted_cgm,
@@ -103,11 +126,22 @@ class Environment:
         self.sleep_mode = self.get_sleep_signal()
 
         # Step 6: Compute reward
-        reward = self.compute_reward(time_since_last_injection_array, time_since_last_meal_array, predicted_cgm, action)
+        reward = self.compute_reward(
+            time_since_last_injection_array,
+            time_since_last_meal_array,
+            predicted_cgm,
+            executed_action,
+        )
 
-        self.prev_action = action
+        self.prev_action = executed_action
 
-        return self.current_state, predicted_cgm, self.time_series, reward, False, {}
+        info = {
+            "proposed_action": proposed_action,
+            "executed_action": executed_action,
+            "safeguard": safeguard_decision,
+        }
+
+        return self.current_state, predicted_cgm, self.time_series, reward, False, info
 
     def compute_reward(self, time_since_last_injection_array, time_since_last_meal_array, predicted_cgm, action):
         action_type, action_value, time_index = action

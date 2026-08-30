@@ -60,7 +60,8 @@ def test_sac(env, agent, folder_path):
     if os.path.isfile(log_path):
         os.remove(log_path)
 
-    test_rewards, test_cgms, test_actions, test_time_window, test_behavioral_features = [], [], [], [], []
+    test_rewards, test_cgms, test_actions, test_executed_actions = [], [], [], []
+    test_safeguard_logs, test_time_window, test_behavioral_features = [], [], []
     test_tir, test_tar, test_tbr, test_cv = [], [], [], []
 
     y_history = env.simulator.data.y_history
@@ -71,18 +72,19 @@ def test_sac(env, agent, folder_path):
         state = env.reset(state_index=i, is_testing=True)
 
         total_reward = 0
-        rewards, predicted_cgms, actions, time_window = [], [], [], []
+        rewards, predicted_cgms, actions, executed_actions, time_window = [], [], [], [], []
 
         print(f"\n--------------------- Test {i + 1} ---------------------")
         for step in range(SACConfig.TESTING_STEPS):
             action_type, value, time_index = agent.select_action(state)
             action = (action_type, value, time_index)
 
-            state, predicted_cgm, time_series, reward, _, _ = env.step(step, action)
+            state, predicted_cgm, time_series, reward, _, info = env.step(step, action)
 
             total_reward += reward
             rewards.append(reward)
             actions.append(action)
+            executed_actions.append(info["executed_action"])
             predicted_cgms.extend(predicted_cgm)
             time_window.extend(time_series)
 
@@ -90,12 +92,15 @@ def test_sac(env, agent, folder_path):
         episode_end_reward = env.compute_episode_reward()
         total_reward += episode_end_reward
 
-        agent_features = extract_behavior_features_from_actions(actions, main_meal_actions)
+        # Behavioral results represent actions actually delivered to the simulator.
+        agent_features = extract_behavior_features_from_actions(executed_actions, main_meal_actions)
         test_behavioral_features.append(agent_features)
 
         test_rewards.append(total_reward)
         test_cgms.append(predicted_cgms)
         test_actions.append(actions)
+        test_executed_actions.append(executed_actions)
+        test_safeguard_logs.append(env.safeguard_log.copy())
         test_time_window.append(time_window)
 
         print(f"\n-------------- Results for Test {i + 1} ---------------\n")
@@ -121,7 +126,7 @@ def test_sac(env, agent, folder_path):
         plot_cgm_reward_action(cgm_sequence=predicted_cgms,
             hour_series=time_window,
             reward_list=rewards,
-            action_list=actions,
+            action_list=executed_actions,
             test_index=i + 1,
             main_meal_actions=main_meal_actions,
             save_path_prefix=folder_path)
@@ -136,7 +141,15 @@ def test_sac(env, agent, folder_path):
             f.write(f"Time-below-Range        : {tbr:.2f}%\n")
             f.write(f"Coefficient of Variation: {cv:.2f}%\n")
 
-    evaluate_performance(test_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path)
+    evaluate_performance(test_executed_actions, test_time_window, y_history, test_tir, test_tar, test_tbr, test_cv, log_path, folder_path)
+
+    # Preserve both policy proposals and safeguarded actions for later analysis.
+    with open(os.path.join(folder_path, "bolus_safeguard_evaluation.pkl"), "wb") as f:
+        pickle.dump({
+            "proposed_actions": test_actions,
+            "executed_actions": test_executed_actions,
+            "safeguard_decisions": test_safeguard_logs,
+        }, f)
 
     if test_behavioral_features:
         avg_features = {}

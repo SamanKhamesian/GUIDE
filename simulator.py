@@ -24,6 +24,12 @@ class Simulator:
     def get_full_current_window(self):
         return self.data.X[0].copy()
 
+    def get_current_bolus_history(self):
+        """Return the current six-hour bolus history in real insulin units."""
+        full_real = self.data.get_inverse_transform(self.data.X[0])
+        bolus_column = 5
+        return full_real[:, bolus_column].copy()
+
     def get_time_window(self):
         full_real = self.data.get_inverse_transform(self.data.X[0])
         return np.round(full_real[-12:, 0]).astype(int)
