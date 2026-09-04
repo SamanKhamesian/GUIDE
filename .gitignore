@@ -2,6 +2,7 @@
 dataset/
 tests/
 archive/
+ablation_study/
 
 *.sh
 

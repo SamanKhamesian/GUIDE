@@ -69,6 +69,13 @@ class OfflineBufferConfig:
     INSULIN_RANGE = EnvConfig.INSULIN_RANGE
 
 
+class RewardAblationMode:
+    FULL = "full"
+    NO_GLYCEMIC = "no_glycemic"
+    NO_MEAL = "no_meal"
+    NO_INSULIN = "no_insulin"
+
+
 class RewardShaping:
     IDEAL_CGM = 125
     WEIGHTS = [100, 7.0, 2.0]
@@ -76,6 +83,8 @@ class RewardShaping:
     HYPO_HYPER_1_PENALTY = 100
     HYPO_HYPER_2_PENALTY = 200
     HYPO_HYPER_3_PENALTY = 300
+
+    ABLATION_MODE = RewardAblationMode.FULL
 
 
 # TD3_BC Model Configuration

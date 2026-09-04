@@ -1,7 +1,7 @@
 import numpy as np
 
-from config import RewardShaping, Action, Threshold, EnvConfig
 from bolus_safeguard import apply_bolus_safeguard
+from config import Action, Threshold, EnvConfig, RewardShaping, RewardAblationMode
 from simulator import Simulator
 from utils import cal_time_in_range, count_glycemic_events
 
@@ -152,33 +152,38 @@ class Environment:
         y = predicted_cgm
         slope, _ = np.polyfit(x, y, 1)
 
-        # Identify glycemic ranges
-        hypo = predicted_cgm < Threshold.HYPOGLYCEMIA
-        hyper = predicted_cgm > Threshold.HYPERGLYCEMIA
-        normal = ~hypo & ~hyper
+        # Glycemic reward
+        if RewardShaping.ABLATION_MODE != RewardAblationMode.NO_GLYCEMIC:
+            # Identify glycemic ranges
+            hypo = predicted_cgm < Threshold.HYPOGLYCEMIA
+            hyper = predicted_cgm > Threshold.HYPERGLYCEMIA
+            normal = ~hypo & ~hyper
 
-        # Extract reward weights for different glycemic zones
-        w_normal = RewardShaping.WEIGHTS[0]
-        w_hypo = RewardShaping.WEIGHTS[1]
-        w_hyper = RewardShaping.WEIGHTS[2]
-        ideal_cgm = RewardShaping.IDEAL_CGM
+            # Extract reward weights for different glycemic zones
+            w_normal = RewardShaping.WEIGHTS[0]
+            w_hypo = RewardShaping.WEIGHTS[1]
+            w_hyper = RewardShaping.WEIGHTS[2]
+            ideal_cgm = RewardShaping.IDEAL_CGM
 
-        # Compute reward for each CGM point based on zone
-        reward = np.zeros_like(predicted_cgm)
-        normal_vals = predicted_cgm[normal]
+            # Compute reward for each CGM point based on zone
+            reward = np.zeros_like(predicted_cgm)
+            normal_vals = predicted_cgm[normal]
 
-        # Penalize hypoglycemia proportionally
-        reward[hypo] = -w_hypo * (Threshold.HYPOGLYCEMIA - predicted_cgm[hypo])
+            # Penalize hypoglycemia proportionally
+            reward[hypo] = -w_hypo * (Threshold.HYPOGLYCEMIA - predicted_cgm[hypo])
 
-        # Penalize hyperglycemia proportionally
-        reward[hyper] = -w_hyper * (predicted_cgm[hyper] - Threshold.HYPERGLYCEMIA)
+            # Penalize hyperglycemia proportionally
+            reward[hyper] = -w_hyper * (predicted_cgm[hyper] - Threshold.HYPERGLYCEMIA)
 
-        reward[normal] = np.where(normal_vals <= ideal_cgm,
-                                  (normal_vals - Threshold.HYPOGLYCEMIA) / (ideal_cgm - Threshold.HYPOGLYCEMIA) * w_normal,
-                                  (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - ideal_cgm) * w_normal)
+            reward[normal] = np.where(normal_vals <= ideal_cgm,
+                                      (normal_vals - Threshold.HYPOGLYCEMIA) / (ideal_cgm - Threshold.HYPOGLYCEMIA) * w_normal,
+                                      (Threshold.HYPERGLYCEMIA - normal_vals) / (Threshold.HYPERGLYCEMIA - ideal_cgm) * w_normal)
 
-        # Aggregate reward across all time steps
-        total_reward = np.sum(reward)
+            # Aggregate reward across all time steps
+            total_reward = np.sum(reward)
+
+        else:
+            total_reward = 0.0
 
         # Update time since last meal and insulin for this time slot
         time_since_last_meal = time_since_last_meal_array[time_index] + 1
@@ -196,43 +201,47 @@ class Environment:
             total_reward += 50  # increased from 25
 
         # Penalize not injecting insulin when hyperglycemia is severe
-        if action_type != Action.INJECT and mean_cgm > 185:
-            total_reward -= min(2000, (mean_cgm - 185) * 20)
+        if RewardShaping.ABLATION_MODE != RewardAblationMode.NO_INSULIN:
+            if action_type != Action.INJECT and mean_cgm > 185:
+                total_reward -= min(2000, (mean_cgm - 185) * 20)
 
         # Penalize not eating when CGM is low
-        if action_type != Action.EAT and mean_cgm < 90:
-            total_reward -= min(200, (90 - mean_cgm) * 5)
+        if RewardShaping.ABLATION_MODE != RewardAblationMode.NO_MEAL:
+            if action_type != Action.EAT and mean_cgm < 90:
+                total_reward -= min(200, (90 - mean_cgm) * 5)
 
         # Evaluate insulin action
-        if action_type == Action.INJECT:
-            # Penalize injecting when CGM is already low
-            if mean_cgm < 150:
-                total_reward -= min(500, (150 - mean_cgm) * 10)
+        if RewardShaping.ABLATION_MODE != RewardAblationMode.NO_INSULIN:
+            if action_type == Action.INJECT:
+                # Penalize injecting when CGM is already low
+                if mean_cgm < 150:
+                    total_reward -= min(500, (150 - mean_cgm) * 10)
 
-            # Reward insulin if CGM is high
-            if mean_cgm > 185:
-                total_reward += min(2000, (mean_cgm - 185) * 20)
+                # Reward insulin if CGM is high
+                if mean_cgm > 185:
+                    total_reward += min(2000, (mean_cgm - 185) * 20)
 
-            if time_since_last_insulin < 2 * 12:  # increased from 18
-                total_reward -= 100
+                if time_since_last_insulin < 2 * 12: # increased from 18
+                    total_reward -= 100
 
-            if time_since_last_meal <= 18 and mean_cgm > 140 and slope > 0:
-                total_reward += 75
+                if time_since_last_meal <= 18 and mean_cgm > 140 and slope > 0:
+                    total_reward += 75
 
         # Evaluate meal action
-        if action_type == Action.EAT:
-            # Reward eating when CGM is low
-            if mean_cgm < 90:
-                total_reward += min(200, (90 - mean_cgm) * 5)
+        if RewardShaping.ABLATION_MODE != RewardAblationMode.NO_MEAL:
+            if action_type == Action.EAT:
+                # Reward eating when CGM is low
+                if mean_cgm < 90:
+                    total_reward += min(200, (90 - mean_cgm) * 5)
 
-            if mean_cgm > 150 and time_since_last_meal < 2 * 12:
-                total_reward -= 100
+                if mean_cgm > 150 and time_since_last_meal < 2 * 12:
+                    total_reward -= 100
 
-            # Reward eating after recent insulin injection (may prevent hypo)
-            if time_since_last_insulin < 12:
-                total_reward += 25  # reduced from 50
-            else:
-                total_reward += 5  # reduced from 10
+                # Reward eating after recent insulin injection (may prevent hypo)
+                if time_since_last_insulin < 12:
+                    total_reward += 25 # reduced from 50
+                else:
+                    total_reward += 5 # reduced from 10
 
         # Update repeat counter based on current action
         if self.prev_action[0] == action_type and action_type != Action.NOTHING:
@@ -249,6 +258,9 @@ class Environment:
         return total_reward
 
     def compute_episode_reward(self):
+        if RewardShaping.ABLATION_MODE == RewardAblationMode.NO_GLYCEMIC:
+            return 0.0
+
         cgm_array = np.array(self.episode_cgm_history)
 
         # Compute daily metrics clearly:
