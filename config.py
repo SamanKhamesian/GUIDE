@@ -33,14 +33,6 @@ class EnvConfig:
 
 
 class BolusSafetyConfig:
-    """Experimental settings for the post-policy bolus safeguard.
-
-    These values define the safeguard used by the simulation study. They are
-    shared defaults because patient-specific pump settings are not available
-    in the current datasets. They must not be interpreted as individualized
-    clinical recommendations.
-    """
-
     ENABLED = True
 
     # The simulator operates at five-minute resolution.
@@ -53,9 +45,6 @@ class BolusSafetyConfig:
     # A new bolus is blocked when a previous bolus occurred within this period.
     MIN_BOLUS_INTERVAL_MINUTES = 2 * 60
 
-    # Experimental shared limits. These are initialized from the existing
-    # proposal-space maximum and should be finalized through justification and
-    # sensitivity analysis before reporting the safeguard results.
     MAX_ACTIVE_BOLUS = float(EnvConfig.INSULIN_RANGE[1])
     MAX_CUMULATIVE_BOLUS = float(EnvConfig.INSULIN_RANGE[1])
 
