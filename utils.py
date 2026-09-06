@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import torch
+from matplotlib.transforms import ScaledTranslation
 from scipy.stats import wilcoxon
 from statsmodels.stats.multitest import multipletests
 
@@ -256,22 +257,26 @@ def extract_behavior_features_from_actions(actions, main_meal_actions):
     bolus_to_carb_ratio = total_bolus / total_carb if total_carb > 0 else 0.0
 
     meal_times = sorted(t for t, _ in all_meals)
+
     if len(meal_times) >= 2:
         meal_diffs = np.diff(meal_times) * 60
         avg_meal_gap = np.mean(meal_diffs)
+
     else:
         avg_meal_gap = 0.0
 
     bolus_times = sorted(t for t, _ in bolus_events)
+
     if len(bolus_times) >= 2:
         bolus_diffs = np.diff(bolus_times) * 60
         avg_bolus_gap = np.mean(bolus_diffs)
+
     else:
         avg_bolus_gap = 0.0
 
     return {"Number of Injections": round(boluses_per_day, 2),
-            "Total Bolus Units": round(total_insulin_per_day, 2),
-            "Number of Meals": round(meals_per_day, 2),
+            "Total \nBolus Units": round(total_insulin_per_day, 2),
+            "Number \nof Meals": round(meals_per_day, 2),
             "Total Carb Size": round(total_carb, 2),
             "Bolus to Carb Ratio": round(bolus_to_carb_ratio, 2),
             "Meal Gap \n(min)": round(avg_meal_gap, 2),
@@ -300,23 +305,27 @@ def extract_patient_behavior_features(x_patient):
 
     # NEW: Avg time between meals (entire dataset)
     meal_times = meal_events["timestamp"].values
+
     if len(meal_times) >= 2:
         meal_diffs = np.diff(meal_times).astype('timedelta64[m]').astype(int)
         avg_meal_gap = np.mean(meal_diffs)
+
     else:
         avg_meal_gap = 0.0
 
     # NEW: Avg time between injections (entire dataset)
     bolus_times = bolus_events["timestamp"].values
+
     if len(bolus_times) >= 2:
         bolus_diffs = np.diff(bolus_times).astype('timedelta64[m]').astype(int)
         avg_bolus_gap = np.mean(bolus_diffs)
+
     else:
         avg_bolus_gap = 0.0
 
     return {"Number of Injections": round(boluses_per_day, 2),
-            "Total Bolus Units": round(total_bolus_per_day, 2),
-            "Number of Meals": round(meals_per_day, 2),
+            "Total \nBolus Units": round(total_bolus_per_day, 2),
+            "Number \nof Meals": round(meals_per_day, 2),
             "Total Carb Size": round(total_carb_per_day, 2),
             "Bolus to Carb Ratio": round(bolus_to_carb_ratio, 2),
             "Meal Gap \n(min)": round(avg_meal_gap, 2),
@@ -446,41 +455,46 @@ def plot_cgm_reward_action(cgm_sequence,
     def plot_continuous_segments(x, y, mask, color, label):
         segments = []
         current = []
+
         for i in range(len(mask)):
             if mask[i]:
                 current.append(i)
+
             elif current:
                 segments.append(current)
                 current = []
+
         if current:
             segments.append(current)
 
         if segments:
             for i, segment in enumerate(segments):
                 ax1.plot(x[segment], y[segment], color=color, label=label if i == 0 else None)
+
         else:
-            ax1.plot([], [], color=color, label=label)
+            ax1.plot([], [], color=color, label=label, linewidth=3)
 
     plot_continuous_segments(x_cgm, cgm_day, hypo_mask, 'red', 'Hypoglycemia')
     plot_continuous_segments(x_cgm, cgm_day, hyper_mask, 'orange', 'Hyperglycemia')
     plot_continuous_segments(x_cgm, cgm_day, in_range_mask, 'green', 'In Range')
 
-    ax1.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=0.5)
-    ax1.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=0.5)
+    ax1.axhline(y=Threshold.HYPOGLYCEMIA, color='red', linestyle='--', linewidth=2)
+    ax1.axhline(y=Threshold.HYPERGLYCEMIA, color='orange', linestyle='--', linewidth=2)
 
-    ax1.set_title(f"Results for Test {test_index}", fontsize=16)
-    ax1.set_ylabel("CGM Level (mg/dL)", fontsize=14)
-    ax1.set_xlabel("Time of the day (Hour)", fontsize=14)
+    ax1.set_ylabel("CGM Level (mg/dL)", fontsize=18)
+    ax1.set_xlabel("Time of the day (Hour)", fontsize=18)
     ax1.set_ylim(0, 300)
-    ax1.grid(True)
+    ax1.grid(True, alpha=0.5)
+    ax1.set_facecolor('whitesmoke')
 
     # Reward plot
     reward_day = reward_list[start:end]
     x_reward = np.arange(0, day_length, 12)
     ax2.plot(x_reward, reward_day, label='Reward', color='orange')
-    ax2.set_ylabel("Reward", fontsize=14)
-    ax2.set_xlabel("Time of the day (Hour)", fontsize=14)
-    ax2.grid(True)
+    ax2.set_ylabel("Reward", fontsize=18)
+    ax2.set_xlabel("Time of the day (Hour)", fontsize=18)
+    ax2.grid(True, alpha=0.5)
+    ax2.set_facecolor('whitesmoke')
 
     # Action markers
     for i in range(start, end):
@@ -490,21 +504,25 @@ def plot_cgm_reward_action(cgm_sequence,
         if action_type == 0:
             color = 'green'
             label = None
+
         elif action_type == 1:
             color = 'blue'
             label = f"{action_value:.1f}"
+
         elif action_type == 2:
             color = 'red'
             label = f"{action_value:.1f}"
+
         else:
             continue
 
         for ax in [ax1, ax2]:
-            ax.axvline(x=x, ymin=0, ymax=0.1, color=color, linewidth=1.5)
+            ax.axvline(x=x, ymin=0, ymax=0.1, color=color, linewidth=3)
+
             if label and ax == ax1:
                 ylim = ax.get_ylim()
                 y_pos = ylim[0] + 0.12 * (ylim[1] - ylim[0])
-                ax.text(x, y_pos, label, ha='center', va='bottom', fontsize=10, color=color)
+                ax.text(x, y_pos, label, ha='center', va='bottom', fontsize=14, color=color)
 
     # Plot main meal actions (if any)
     if main_meal_actions:
@@ -512,11 +530,12 @@ def plot_cgm_reward_action(cgm_sequence,
             x = step_index * 12 + int(action_time)
 
             for ax in [ax1, ax2]:
-                ax.axvline(x=x, ymin=0, ymax=0.1, color='m', linewidth=1.5)
+                ax.axvline(x=x, ymin=0, ymax=0.1, color='m', linewidth=3)
+
                 if ax == ax1:
                     ylim = ax.get_ylim()
                     y_pos = ylim[0] + 0.12 * (ylim[1] - ylim[0])
-                    ax.text(x, y_pos, f"{action_value:.1f}", ha='center', va='bottom', fontsize=10, color='m')
+                    ax.text(x, y_pos, f"{action_value:.1f}", ha='center', va='bottom', fontsize=14, color='m')
 
     # Hour ticks and labels
     hour_day = hour_series[start * day_length:end * day_length]
@@ -524,24 +543,24 @@ def plot_cgm_reward_action(cgm_sequence,
     tick_labels = [str(int(hour_day[i])) for i in tick_indices]
 
     ax2.set_xticks(tick_indices)
-    ax2.set_xticklabels(tick_labels, fontsize=14)
+    ax2.set_xticklabels(tick_labels, fontsize=18)
 
-    ax1.tick_params(axis='x', labelbottom=True, labelsize=14)
-    ax2.tick_params(axis='x', labelsize=14)
-    ax1.tick_params(axis='y', labelsize=14)
-    ax2.tick_params(axis='y', labelsize=14)
+    ax1.tick_params(axis='x', labelbottom=True, labelsize=18)
+    ax2.tick_params(axis='x', labelsize=18)
+    ax1.tick_params(axis='y', labelsize=18)
+    ax2.tick_params(axis='y', labelsize=18)
 
     # Legends (split)
-    cgm_legend = ax1.legend(loc='upper right', fontsize=12)
+    cgm_legend = ax1.legend(loc='upper right', fontsize=16)
     ax1.add_artist(cgm_legend)
 
     action_patches = [mpatches.Patch(color='green', label='Nothing'), mpatches.Patch(color='blue', label='Eat (g)'),
                       mpatches.Patch(color='red', label='Inject (U)'), mpatches.Patch(color='m', label='Meal (g)')]
 
-    ax1.legend(handles=action_patches, loc='upper left', fontsize=12)
+    ax1.legend(handles=action_patches, loc='upper left', fontsize=16)
 
     plt.tight_layout()
-    plt.savefig(f"{save_path_prefix}/test_{test_index}_results.png", dpi=300)
+    plt.savefig(f"{save_path_prefix}/test_{test_index}_results.pdf", dpi=300)
     plt.close()
 
 
@@ -601,9 +620,6 @@ def plot_eat_action_distribution(test_actions, test_time_window, save_path, show
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_carb_distribution.png', dpi=300)
 
-    if show:
-        plt.show()
-
     # Plot 2: Average carb amount with std dev
     plt.figure(figsize=(10, 5))
     plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='dodgerblue', alpha=0.9, error_kw=dict(ecolor='red', linewidth=1.5))
@@ -648,7 +664,6 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path, 
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_distribution.png', dpi=300)
 
-
     # Plot 2: Average insulin amount with std dev
     plt.figure(figsize=(10, 5))
     plt.bar(hours, avg_amounts, yerr=std_amounts, capsize=4, color='mediumseagreen', alpha=0.9, error_kw=dict(ecolor='black', linewidth=1.5))
@@ -659,11 +674,10 @@ def plot_insulin_action_distribution(test_actions, test_time_window, save_path, 
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig(f'{save_path}/all_insulin_amount.png', dpi=300)
-
     plt.close()
 
 
-def plot_behavior_radar(patient, agent, save_path, show=False):
+def plot_behavior_radar(patient, agent, save_path):
     labels = list(patient.keys())
     num_vars = len(labels)
 
@@ -686,24 +700,22 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
     angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
+    fig, ax = plt.subplots(figsize=(7.5, 7), subplot_kw=dict(polar=True))
 
-    # --- Custom Styling ---
-    ax.set_title(f'Average Daily Behavioral Feature Comparison', fontsize=16, pad=20)
-    ax.title.set_y(1.1)
-    ax.tick_params(axis='y', labelsize=10)
-    ax.tick_params(axis='x', labelsize=10, pad=25)
-    ax.xaxis.grid(True, color='#AAAAAA')
-    ax.yaxis.grid(True, color='#AAAAAA')
+    ax.tick_params(axis='y', labelsize=16)
+    ax.tick_params(axis='x', labelsize=16, pad=40)
 
-    # Plot the normalized data
+    ax.xaxis.grid(True, color='#AAAAAA', alpha=0.5)
+    ax.yaxis.grid(True, color='#AAAAAA', alpha=0.5)
+
     ax.plot(angles, patient_vals_norm, label='Patient', color='#FF69B4', linewidth=2)
     ax.fill(angles, patient_vals_norm, color='#FF69B4', alpha=0.3)
 
     ax.plot(angles, agent_vals_norm, label='RL Agent', color='deepskyblue', linewidth=2)
     ax.fill(angles, agent_vals_norm, color='deepskyblue', alpha=0.3)
 
-    r_grids_norm = [0.2, 0.4, 0.6, 0.8, 1.0]
+    r_grids_norm = [0.25, 0.5, 0.75, 1.0]
+
     ax.set_ylim(0, 1.0)
     ax.set_yticks(r_grids_norm)
     ax.set_yticklabels([])
@@ -711,15 +723,16 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
     for i in range(num_vars):
         feat = labels[i]
         angle = angles[i]
-
-        max_val_real = max_vals_dict[feat] * 1.0
+        max_val_real = max_vals_dict[feat]
 
         if 0.0 < angle < np.pi:
             text_offset = 0.03
             alignment = 'left'
+
         elif angle > np.pi:
             text_offset = -0.03
             alignment = 'right'
+
         else:
             text_offset = 0.0
             alignment = 'center'
@@ -729,23 +742,50 @@ def plot_behavior_radar(patient, agent, save_path, show=False):
 
             if r_real >= 10:
                 format_str = f'{r_real:.0f}'
+
             elif r_real >= 1:
                 format_str = f'{r_real:.1f}'
+
             elif r_real >= 0.1:
                 format_str = f'{r_real:.2f}'
+
             else:
                 format_str = f'{r_real:.3f}'
 
-            ax.text(angle + text_offset, r_norm, format_str, ha=alignment, va='center', fontsize=10, color='dimgray', clip_on=True)
+            # Put only the outermost values outside the circle
+            text_radius = 1 if np.isclose(r_norm, 1.0) else r_norm
+            ax.text(angle + text_offset, text_radius, format_str, ha=alignment, va='center', fontsize=15, color='gray', clip_on=False, zorder=10)
 
     ax.set_thetagrids(np.degrees(angles[:-1]), labels)
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
 
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.25), fontsize=12, ncol=2)
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels)
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+
+    # Small individual adjustments to selected axis labels
+    for tick_label in ax.get_xticklabels():
+        label_name = ' '.join(tick_label.get_text().split())
+
+        if label_name == 'Number of Meals':
+            dx, dy = 5, -1
+
+        elif label_name == 'Number of Injections':
+            dx, dy = 0, -15
+
+        elif label_name == 'Meal Gap (min)':
+            dx, dy = -5, -1
+
+        else:
+            continue
+
+        tick_label.set_transform(tick_label.get_transform() + ScaledTranslation(dx / 72, dy / 72, fig.dpi_scale_trans))
+
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.25), fontsize=18, ncol=2)
 
     plt.tight_layout()
-    plt.savefig(f'{save_path}/behavioral_comparison_radar.png', dpi=300)
+    plt.savefig(f'{save_path}/behavioral_comparison_radar.pdf', dpi=300)
     plt.close()
 
 
