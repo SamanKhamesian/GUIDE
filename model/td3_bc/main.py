@@ -208,7 +208,7 @@ def main(dataset_name, patient_id, seed):
     agent = TD3_BC(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
 
     buffer = ReplayBuffer()
-    buffer.fill_replay_buffer(env, seed)
+    buffer.fill_replay_buffer(env)
 
     train_td3_bc(agent, buffer)
 

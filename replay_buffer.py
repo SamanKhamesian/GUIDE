@@ -39,10 +39,9 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.storage)
-    
-    def fill_replay_buffer(self, env, seed):
+
+    def fill_replay_buffer(self, env):
         print("Filling shared offline replay buffer...")
-        np.random.seed(seed)
 
         for i in range(OfflineBufferConfig.NUM_TRAIN_INIT_STATE):
             for _ in range(OfflineBufferConfig.MAX_EPISODES):
@@ -50,22 +49,15 @@ class ReplayBuffer:
                 episode_states, episode_actions, episode_rewards, episode_next_states = [], [], [], []
 
                 for step in range(OfflineBufferConfig.MAX_STEPS_PER_EPISODE):
-                    probs = np.random.dirichlet(np.ones(3))
-                    action_type = np.argmax(probs)
+                    scores = np.random.randn(3)
+                    action_type = np.argmax(scores)
                     carb_amount = np.random.uniform(*OfflineBufferConfig.CARB_RANGE)
                     insulin_amount = np.random.uniform(*OfflineBufferConfig.INSULIN_RANGE)
                     time_index = np.random.randint(0, 12)
 
-                    action_vector = np.array(
-                        [probs[0], probs[1], probs[2], carb_amount, insulin_amount, time_index],
-                        dtype=np.float32
-                    )
+                    action_vector = np.array([scores[0], scores[1], scores[2], carb_amount, insulin_amount, time_index], dtype=np.float32)
 
-                    action_value = (
-                        carb_amount if action_type == 1
-                        else insulin_amount if action_type == 2
-                        else 0.0
-                    )
+                    action_value = (carb_amount if action_type == 1 else insulin_amount if action_type == 2 else 0.0)
                     action = (action_type, action_value, time_index)
 
                     next_state, _, _, reward, _, _ = env.step(step, action)
@@ -81,12 +73,7 @@ class ReplayBuffer:
                 total_steps = len(episode_rewards)
                 adjusted_rewards = [r + episode_end_reward / total_steps for r in episode_rewards]
 
-                for s, a, r, s_next in zip(
-                    episode_states,
-                    episode_actions,
-                    adjusted_rewards,
-                    episode_next_states
-                ):
+                for s, a, r, s_next in zip(episode_states, episode_actions, adjusted_rewards, episode_next_states):
                     self.add(s, a, r, s_next, False)
 
         print(f"Shared offline replay buffer filled with {len(self)} transitions.")

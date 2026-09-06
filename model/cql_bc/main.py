@@ -198,7 +198,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./model/cql_bc/final_test/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/cql_bc/test/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
@@ -209,7 +209,7 @@ def main(dataset_name, patient_id, seed):
     agent = CQL(state_dim=EnvConfig.STATE_DIM, action_dim=len(action_high), max_action=action_high, device=device)
 
     buffer = ReplayBuffer()
-    buffer.fill_replay_buffer(env, seed)
+    buffer.fill_replay_buffer(env)
 
     train_cql(agent, buffer)
 

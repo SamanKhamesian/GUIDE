@@ -45,8 +45,8 @@ class BolusSafetyConfig:
     # A new bolus is blocked when a previous bolus occurred within this period.
     MIN_BOLUS_INTERVAL_MINUTES = 2 * 60
 
-    MAX_ACTIVE_BOLUS = float(EnvConfig.INSULIN_RANGE[1])
-    MAX_CUMULATIVE_BOLUS = float(EnvConfig.INSULIN_RANGE[1])
+    MAX_ACTIVE_BOLUS = 30
+    MAX_CUMULATIVE_BOLUS = 60
 
 
 class OfflineBufferConfig:
