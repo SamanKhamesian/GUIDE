@@ -15,9 +15,8 @@ from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time
                    extract_behavior_features_from_actions, cal_coefficient_of_variation, plot_behavior_radar)
 
 
-def train_ppo(env, env_eval, agent, buffer, folder_path):
+def train_ppo(env, agent, buffer):
     print("Starting PPO training...")
-    eval_returns = []
 
     for epoch in range(PPOConfig.MAX_EPOCHS):
         for i in range(PPOConfig.NUM_TRAIN_INIT_STATE):
@@ -65,48 +64,11 @@ def train_ppo(env, env_eval, agent, buffer, folder_path):
         agent.train(buffer)
         buffer.reset()
 
-        # ---- Evaluation ----
-        avg_return = evaluate_agent(env_eval, agent)
-        eval_returns.append((epoch, avg_return))
-        print(f"[Eval] Epoch {epoch}/{PPOConfig.MAX_EPOCHS} | Avg return: {avg_return:.2f}")
-
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # save learning curve
-    save_path = os.path.join(folder_path, "learning_curve.pkl")
-    with open(save_path, "wb") as f:
-        pickle.dump(eval_returns, f)
-
-    print("Training finished and learning curve saved.")
-
-
-def evaluate_agent(env, agent):
-    returns = []
-
-    for i in range(PPOConfig.NUM_TEST_INIT_STATE):
-        state = env.reset(state_index=i, is_testing=True)
-        total_reward = 0.0
-
-        for step in range(PPOConfig.TESTING_STEPS):
-            with torch.no_grad():
-                action_type, carb_amount, insulin_amount, time_index, _ = agent.select_action(state)
-
-            value = (
-                carb_amount if action_type == Action.EAT
-                else insulin_amount if action_type == Action.INJECT
-                else 0.0
-            )
-
-            action = (action_type, value, time_index)
-            state, _, _, reward, _, _ = env.step(step, action)
-            total_reward += reward
-
-        total_reward += env.compute_episode_reward()
-        returns.append(total_reward)
-
-    return float(np.mean(returns))
+    print("PPO training finished.")
 
 
 def test_ppo(env, agent, folder_path):
@@ -278,21 +240,28 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f"./model/ppo/tests/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/"
+    folder_path = f"./model/ppo/final_test/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/"
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
-    env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
-
     agent = PPOAgent(state_dim=EnvConfig.STATE_DIM, device=device)
     buffer = PPOBuffer(state_dim=EnvConfig.STATE_DIM, device=device)
 
-    train_ppo(env, env_eval, agent, buffer, folder_path)
+    train_ppo(env, agent, buffer)
+
+    torch.save({
+        "actor_state_dict": agent.actor.state_dict(),
+        "critic_state_dict": agent.critic.state_dict(),
+    }, os.path.join(folder_path, "trained_model.pt"))
+
     test_ppo(env, agent, folder_path)
 
 
 if __name__ == "__main__":
-    set_seed(DataConfig.SEEDS[0])
-    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID), seed=DataConfig.SEEDS[0])
+    _patient_id = sys.argv[1]
+    _seed = int(sys.argv[2])
+
+    set_seed(_seed)
+    main(dataset_name=DataConfig.DATASET, patient_id=_patient_id, seed=_seed)

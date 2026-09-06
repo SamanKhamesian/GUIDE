@@ -3,6 +3,7 @@ dataset/
 tests/
 archive/
 ablation_study/
+adherence_study/
 
 *.sh
 

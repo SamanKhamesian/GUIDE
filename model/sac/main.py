@@ -1,5 +1,6 @@
 import os
 import pickle
+import sys
 
 import numpy as np
 import torch
@@ -13,44 +14,16 @@ from utils import (plot_cgm_reward_action, cal_time_in_range, cal_time_below_ran
                    extract_patient_behavior_features, plot_behavior_radar, set_seed)
 
 
-def train_sac(env, agent, buffer, folder_path):
+def train_sac(agent, buffer):
     print("Starting SAC training...")
-    eval_return = []
 
     for step in range(SACConfig.TRAINING_STEPS):
         agent.train(buffer, batch_size=SACConfig.BATCH_SIZE)
 
         if step % 200 == 0:
             print(f"[Train] step {step}/{SACConfig.TRAINING_STEPS}")
-            avg_return = evaluate_agent(env, agent)
-            eval_return.append((step, avg_return))
 
-    save_path = os.path.join(folder_path, "learning_curve.pkl")
-
-    with open(save_path, "wb") as f:
-        pickle.dump(eval_return, f)
-
-    print("\nTraining is finished and learning curve saved!")
-
-
-def evaluate_agent(env, agent):
-    returns = []
-
-    for i in range(SACConfig.NUM_TEST_INIT_STATE):
-        state = env.reset(state_index=i, is_testing=True)
-        total_reward = 0.0
-
-        for step in range(SACConfig.TESTING_STEPS):
-            action_type, value, time_index = agent.select_action(state)
-
-            action = (action_type, value, time_index)
-            state, _, _, reward, _, _ = env.step(step, action)
-            total_reward += reward
-
-        total_reward += env.compute_episode_reward()
-        returns.append(total_reward)
-
-    return np.mean(returns)
+    print("\nSAC training finished!")
 
 
 def test_sac(env, agent, folder_path):
@@ -216,24 +189,34 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./model/sac/temp/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/sac/final_test/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
-    env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
-
     max_action = np.array([1.0, 1.0, 1.0, SACConfig.CARB_RANGE[1], SACConfig.INSULIN_RANGE[1], 11.0])
     agent = SACAgent(state_dim=EnvConfig.STATE_DIM, action_dim=len(max_action), max_action=max_action, device=device)
 
     buffer = ReplayBuffer()
     buffer.fill_replay_buffer(env, seed)
 
-    train_sac(env_eval, agent, buffer, folder_path)
+    train_sac(agent, buffer)
+
+    torch.save({
+        "actor_state_dict": agent.actor.state_dict(),
+        "critic1_state_dict": agent.critic1.state_dict(),
+        "critic2_state_dict": agent.critic2.state_dict(),
+        "critic1_target_state_dict": agent.critic1_target.state_dict(),
+        "critic2_target_state_dict": agent.critic2_target.state_dict(),
+    }, os.path.join(folder_path, "trained_model.pt"))
+
     test_sac(env, agent, folder_path)
 
 
 if __name__ == "__main__":
-    set_seed(DataConfig.SEEDS[0])
-    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID), seed=DataConfig.SEEDS[0])
+    _patient_id = sys.argv[1]
+    _seed = int(sys.argv[2])
+
+    set_seed(_seed)
+    main(dataset_name=DataConfig.DATASET, patient_id=_patient_id, seed=_seed)

@@ -1,5 +1,6 @@
 import os
 import pickle
+import sys
 
 import numpy as np
 import torch
@@ -13,53 +14,16 @@ from utils import (plot_cgm_reward_action, set_seed, cal_time_in_range, cal_time
                    extract_patient_behavior_features, plot_behavior_radar)
 
 
-def train_cql(env, agent, buffer, action_low, action_high, folder_path):
+def train_cql(agent, buffer):
     print("Starting CQL training...")
-    eval_return = []
 
     for step in range(CQLConfig.TRAINING_STEPS):
         agent.train(buffer, batch_size=CQLConfig.BATCH_SIZE)
 
         if step % 200 == 0:
             print(f"[CQL Train] step {step}/{CQLConfig.TRAINING_STEPS}")
-            avg_return = evaluate_agent(env, agent, action_low, action_high)
-            eval_return.append((step, avg_return))
 
-    save_path = os.path.join(folder_path, "learning_curve.pkl")
-
-    with open(save_path, "wb") as f:
-        pickle.dump(eval_return, f)
-
-    print(f"\nCQL training finished and learning curve saved!")
-
-
-def evaluate_agent(env, agent, action_low, action_high):
-    returns = []
-
-    for i in range(CQLConfig.NUM_TEST_INIT_STATE):
-        state = env.reset(state_index=i, is_testing=True)
-        total_reward = 0
-
-        for step in range(CQLConfig.TESTING_STEPS):
-            raw_action = agent.select_action(state)
-            raw_action = np.clip(raw_action, action_low, action_high)
-
-            scores = raw_action[:3]
-            action_type = int(np.argmax(scores))
-            carb = raw_action[3]
-            insulin = raw_action[4]
-            time_idx = int(np.clip(np.round(raw_action[5]), 0, 11))
-
-            value = carb if action_type == 1 else insulin if action_type == 2 else 0.0
-            action = (action_type, value, time_idx)
-
-            state, _, _, reward, _, _ = env.step(step, action)
-            total_reward += reward
-
-        total_reward += env.compute_episode_reward()
-        returns.append(total_reward)
-
-    return np.mean(returns)
+    print("\nCQL training finished!")
 
 
 def test_cql(env, agent, action_low, action_high, folder_path):
@@ -234,14 +198,12 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     device = torch.device("cpu")
-    folder_path = f'./model/cql_bc/temp/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/cql_bc/final_test/{dataset_name}/{dataset_name}_patient_{patient_id}/seed_{seed}/'
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
-    env_eval = Environment(dataset_name=dataset_name, patient_id=patient_id)
-
     action_low = np.array([0, 0, 0, CQLConfig.CARB_RANGE[0], CQLConfig.INSULIN_RANGE[0], 0], dtype=np.float32)
     action_high = np.array([1, 1, 1, CQLConfig.CARB_RANGE[1], CQLConfig.INSULIN_RANGE[1], 11], dtype=np.float32)
     agent = CQL(state_dim=EnvConfig.STATE_DIM, action_dim=len(action_high), max_action=action_high, device=device)
@@ -249,9 +211,20 @@ def main(dataset_name, patient_id, seed):
     buffer = ReplayBuffer()
     buffer.fill_replay_buffer(env, seed)
 
-    train_cql(env_eval, agent, buffer, action_low, action_high, folder_path)
+    train_cql(agent, buffer)
+
+    torch.save({
+        "actor_state_dict": agent.actor.state_dict(),
+        "actor_target_state_dict": agent.actor_target.state_dict(),
+        "critic_state_dict": agent.critic.state_dict(),
+        "critic_target_state_dict": agent.critic_target.state_dict(),
+    }, os.path.join(folder_path, "trained_model.pt"))
+
     test_cql(env, agent, action_low, action_high, folder_path)
 
 if __name__ == "__main__":
-    set_seed(DataConfig.SEEDS[0])
-    main(dataset_name=DataConfig.DATASET, patient_id=str(DataConfig.PATIENT_ID), seed=DataConfig.SEEDS[0])
+    _patient_id = sys.argv[1]
+    _seed = int(sys.argv[2])
+
+    set_seed(_seed)
+    main(dataset_name=DataConfig.DATASET, patient_id=_patient_id, seed=_seed)
