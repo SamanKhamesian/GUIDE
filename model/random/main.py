@@ -178,7 +178,7 @@ def evaluate_performance(test_actions, test_time_window, y_history, test_tir, te
 
 def main(dataset_name, patient_id, seed):
     env = Environment(dataset_name=dataset_name, patient_id=patient_id)
-    folder_path = f'./model/random/final_test/azt1d/{dataset_name}_patient_{patient_id}/seed_{seed}/'
+    folder_path = f'./model/random/final_tests/azt1d/{dataset_name}_patient_{patient_id}/seed_{seed}/'
     test_random_agent(env, folder_path=folder_path)
 
 

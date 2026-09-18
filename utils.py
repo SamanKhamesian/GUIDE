@@ -373,17 +373,10 @@ def compare_behavioral_feature_vector(root="model/cql_bc/tests/final/azt1d", out
         behavioral_df = patient_df.copy()
         behavioral_df["agent"] = agent_mean
 
-        agent_dic = {
-            row["feature"]: round(row["agent"], 2)
-            for _, row in behavioral_df.iterrows()
-        }
+        agent_dic = {row["feature"]: round(row["agent"], 2) for _, row in behavioral_df.iterrows()}
+        patient_dic = {row["feature"]: round(row["patient"], 2) for _, row in behavioral_df.iterrows()}
 
-        patient_dic = {
-            row["feature"]: round(row["patient"], 2)
-            for _, row in behavioral_df.iterrows()
-        }
-
-        plot_behavior_radar(patient_dic, agent_dic, patient_path, False)
+        # plot_behavior_radar(patient_dic, agent_dic, patient_path, False)
 
         x_patient = np.array(behavioral_df["patient"].values)
         x_agent = np.array(behavioral_df["agent"].values)
@@ -394,24 +387,11 @@ def compare_behavioral_feature_vector(root="model/cql_bc/tests/final/azt1d", out
     x_avg_patient = np.mean(np.stack(all_x_patient), axis=0)
 
     for patient_dir, x_patient, x_agent in all_records:
-        x_patient_norm, x_agent_norm = normalize_behavioral_features(
-            x_patient=x_patient,
-            x_agent=x_agent,
-            x_avg_patient=x_avg_patient
-        )
+        x_patient_norm, x_agent_norm = normalize_behavioral_features(x_patient=x_patient, x_agent=x_agent, x_avg_patient=x_avg_patient)
 
-        normalized_l1 = cal_normalized_l1_distance(
-            x_patient_norm,
-            x_agent_norm
-        )
-        cosine_similarity = cal_cosine_similarity(
-            x_patient_norm,
-            x_agent_norm
-        )
-        mrd, rel_dev = cal_mean_relative_deviation(
-            x_patient_norm,
-            x_agent_norm
-        )
+        normalized_l1 = cal_normalized_l1_distance(x_patient_norm, x_agent_norm)
+        cosine_similarity = cal_cosine_similarity(x_patient_norm, x_agent_norm)
+        mrd, rel_dev = cal_mean_relative_deviation(x_patient_norm, x_agent_norm)
 
         metric_records.append({
             "patient": patient_dir,

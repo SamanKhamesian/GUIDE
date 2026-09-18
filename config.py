@@ -99,7 +99,7 @@ class TD3Config:
     INSULIN_RANGE = (2, 15)
 
 
-# Reward Function Shaping for PPO Model
+# PPO Model Configuration
 class PPOConfig:
     MAX_EPOCHS = 20
     MAX_STEPS_PER_EPISODE = 24
