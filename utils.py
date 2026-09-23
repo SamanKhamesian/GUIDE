@@ -198,34 +198,47 @@ def cal_wilcoxon_matrix(df, algorithms, metric, correction=None):
         return raw_df
 
 
-def plot_tir_comparison(df, algorithms):
+def plot_tir_comparison(df, algorithms, title):
     subjects = np.arange(1, 26)
     num_algos = len(algorithms)
 
-    bar_width = 0.125
-    x = np.arange(len(subjects))
+    bar_width = 0.14
+    group_spacing = 1.3
+    x = np.arange(len(subjects)) * group_spacing
 
-    fig, ax = plt.subplots(figsize=(16, 6))
+    colors = {"TD3-BC": "#A8D675",
+              "CQL-BC": "#F4AE73",
+              "PPO": "#78B9EF",
+              "SAC-Offline": "#A59DE2",
+              "SAC-Online": "#F0CF66",
+              "Random": "#78C9B9",
+              "History": "#DD8FB5"}
+
+    fig, ax = plt.subplots(figsize=(22, 7))
 
     for i, algo in enumerate(algorithms):
         tir_values = df[algo]["tir"]
-        offset = i * bar_width
-        plt.bar(
-            x + offset,
-            tir_values,
-            width=bar_width,
-            label=algo,
-        )
+        offset = (i - (num_algos - 1) / 2) * bar_width
 
-    plt.xlabel("Subject ID", fontsize=14)
-    plt.ylabel("Time in Range (TIR %)", fontsize=14)
-    plt.xticks(x + bar_width * (num_algos - 1) / 2, subjects, fontsize=14)
-    plt.yticks(fontsize=14)
+        ax.bar(x + offset, tir_values, width=bar_width, label=algo, color=colors[algo], edgecolor="#333333", linewidth=0.8)
+
+    ax.set_xlabel("Subject ID", fontsize=18)
+    ax.set_ylabel("Time in Range (TIR %)", fontsize=18)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(subjects, fontsize=16)
+    ax.tick_params(axis="y", labelsize=16)
+
+    ax.set_ylim(0, 100)
     ax.set_facecolor("whitesmoke")
-    plt.legend(fontsize=14, loc="lower right")
-    plt.ylim(0, 100)
+    ax.set_axisbelow(True)
+
+    ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
+    ax.legend(fontsize=16, loc="lower center", bbox_to_anchor=(0.5, -0.25), ncol=7, frameon=False)
+    ax.set_title(title, fontsize=20, pad=20)
+
     plt.tight_layout()
-    plt.savefig("tir_comparison.png", dpi=300)
+    plt.savefig("tir_comparison.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -376,7 +389,7 @@ def compare_behavioral_feature_vector(root="model/cql_bc/tests/final/azt1d", out
         agent_dic = {row["feature"]: round(row["agent"], 2) for _, row in behavioral_df.iterrows()}
         patient_dic = {row["feature"]: round(row["patient"], 2) for _, row in behavioral_df.iterrows()}
 
-        # plot_behavior_radar(patient_dic, agent_dic, patient_path, False)
+        plot_behavior_radar(patient_dic, agent_dic, patient_path, False)
 
         x_patient = np.array(behavioral_df["patient"].values)
         x_agent = np.array(behavioral_df["agent"].values)
@@ -413,8 +426,7 @@ def plot_cgm_reward_action(cgm_sequence,
                            action_list,
                            test_index,
                            main_meal_actions=None,
-                           save_path_prefix=None,
-                           show=False):
+                           save_path_prefix=None):
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
     start = 0
