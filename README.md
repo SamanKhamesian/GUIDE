@@ -66,5 +66,7 @@ If you use GLIMMER in your work, please cite:
       url={https://arxiv.org/abs/2604.00385}, 
 }
 ```
+## License
 
+- Released under the [ASU Non-Commercial Research License](LICENSE).
 ---
